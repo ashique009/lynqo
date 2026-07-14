@@ -1,5 +1,6 @@
 import React from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import { 
   LayoutDashboard, 
   Sparkles, 
@@ -8,19 +9,29 @@ import {
   Settings, 
   HeartHandshake,
   Users,
-  ExternalLink,
-  ShieldCheck
+  ShieldCheck,
+  LogOut
 } from 'lucide-react';
 
 export const Sidebar = () => {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { logout } = useAuth();
   const isAdminPath = location.pathname.startsWith('/admin');
+
+  const handleLogout = async () => {
+    if (isAdminPath) {
+      localStorage.removeItem('admin_token');
+    }
+    await logout();
+    navigate('/');
+  };
 
   const menuItems = isAdminPath 
     ? [
-        { name: 'Admin Dashboard', path: '/admin/dashboard', icon: LayoutDashboard },
-        { name: 'Manage Users', path: '/admin/users', icon: Users },
-        { name: 'Return to App', path: '/dashboard', icon: ExternalLink },
+        { name: 'Dashboard', path: '/admin/dashboard', icon: LayoutDashboard },
+        { name: 'Users', path: '/admin/users', icon: Users },
+        { name: 'Settings', path: '/settings', icon: Settings },
       ]
     : [
         { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
@@ -56,6 +67,15 @@ export const Sidebar = () => {
             </NavLink>
           );
         })}
+        {isAdminPath && (
+          <button
+            onClick={handleLogout}
+            className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold text-rose-400 hover:text-rose-350 hover:bg-rose-500/10 border border-transparent transition-all duration-200 cursor-pointer w-full text-left"
+          >
+            <LogOut className="w-5 h-5" />
+            <span>Logout</span>
+          </button>
+        )}
       </div>
       
       <div className="p-3 bg-brand-purple/5 border border-brand-purple/10 rounded-xl mt-auto">
