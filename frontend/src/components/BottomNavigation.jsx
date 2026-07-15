@@ -18,7 +18,7 @@ export const BottomNavigation = () => {
     ? [
         { name: 'Dashboard', path: '/admin/dashboard', icon: LayoutDashboard },
         { name: 'Users', path: '/admin/users', icon: Users },
-        { name: 'Exit Admin', path: '/dashboard', icon: ExternalLink },
+        { name: 'Settings', path: '/settings', icon: Settings },
       ]
     : [
         { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
