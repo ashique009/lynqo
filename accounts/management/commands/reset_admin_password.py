@@ -4,19 +4,28 @@ from django.contrib.auth import get_user_model
 User = get_user_model()
 
 class Command(BaseCommand):
-    help = 'Reset password for all superusers'
+    help = 'Create or reset the admin superuser'
 
     def handle(self, *args, **kwargs):
+        username = 'ashique'
+        email = 'ashiquekavanoor009@gmail.com'
         new_password = 'Chikkundo@123'
 
-        superusers = User.objects.filter(is_superuser=True)
+        user, created = User.objects.get_or_create(
+            username=username,
+            defaults={
+                'email': email,
+                'full_name': 'Ashique',
+                'phone': '9074258205',
+            }
+        )
 
-        if not superusers.exists():
-            self.stdout.write(self.style.ERROR('No superusers found in the database.'))
-            return
+        user.set_password(new_password)
+        user.is_staff = True
+        user.is_superuser = True
+        user.save()
 
-        for user in superusers:
-            user.set_password(new_password)
-            user.is_staff = True
-            user.save()
-            self.stdout.write(self.style.SUCCESS(f'Password reset for superuser: "{user.username}" (email: {user.email})'))
+        if created:
+            self.stdout.write(self.style.SUCCESS(f'Superuser "{username}" created successfully.'))
+        else:
+            self.stdout.write(self.style.SUCCESS(f'Existing user "{username}" upgraded to superuser and password reset.'))
