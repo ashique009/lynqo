@@ -8,7 +8,8 @@ from .views import (
     SuggestionsView,
     ConversationListView, ConversationDetailView,
     SendMessageView, GetMessagesView,
-    AdminLoginView,AdminDashboardStatsView, AdminUserListView, AdminUserBanView, AdminUserUnbanView, AdminUserDeleteView
+    AdminLoginView,AdminDashboardStatsView, AdminUserListView, AdminUserBanView, AdminUserUnbanView,
+    AdminUserDeleteView,NotificationCountView
 )
 
 urlpatterns = [
@@ -41,4 +42,5 @@ urlpatterns = [
     path('admin/users/<int:user_id>/ban/', AdminUserBanView.as_view(), name='admin-user-ban'),
     path('admin/users/<int:user_id>/unban/', AdminUserUnbanView.as_view(), name='admin-user-unban'),
     path('admin/users/<int:user_id>/delete/', AdminUserDeleteView.as_view(), name='admin-user-delete'),
+    path('notifications/count/', NotificationCountView.as_view(), name='notification-count'),
 ]

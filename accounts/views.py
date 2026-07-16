@@ -472,3 +472,23 @@ class AdminUserDeleteView(APIView):
         username = user.username
         user.delete()
         return success_response(message=f"{username} has been deleted.", data=None, status_code=status.HTTP_200_OK)
+
+class NotificationCountView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        unread_messages = Message.objects.filter(
+            conversation__in=Conversation.objects.filter(
+                models.Q(participant_1=request.user) | models.Q(participant_2=request.user)
+            ),
+            is_read=False
+        ).exclude(sender=request.user).count()
+
+        pending_requests = ConnectRequest.objects.filter(receiver=request.user, status='pending').count()
+
+        data = {
+            "unread_messages": unread_messages,
+            "pending_requests": pending_requests,
+            "total": unread_messages + pending_requests
+        }
+        return success_response(message="Notification counts fetched", data=data, status_code=status.HTTP_200_OK)
