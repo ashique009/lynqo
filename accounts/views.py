@@ -13,7 +13,7 @@ from .serializers import (
     InterestSerializer, ConnectRequestSerializer,
     ConversationSerializer, MessageSerializer,AdminUserListSerializer
 )
-from .models import Profile, Interest, ConnectRequest, Conversation, Message
+from .models import Profile, Interest, ConnectRequest, Conversation, Message,PasswordResetToken
 from .utils import success_response
 
 User = get_user_model()
@@ -492,3 +492,58 @@ class NotificationCountView(APIView):
             "total": unread_messages + pending_requests
         }
         return success_response(message="Notification counts fetched", data=data, status_code=status.HTTP_200_OK)
+    
+
+class ForgotPasswordView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        email = request.data.get('email')
+        user = User.objects.filter(email=email).first()
+
+        if user:
+            # Old unused tokens ivide invalidate cheyyam (optional but good practice)
+            PasswordResetToken.objects.filter(user=user, is_used=False).update(is_used=True)
+
+            reset_token = PasswordResetToken.objects.create(user=user)
+
+            # TEMPORARY: Email illathe test cheyyan, link console il print cheyyum
+            reset_link = f"https://lynqo.vercel.app/reset-password?token={reset_token.token}"
+            print(f"[DEV] Password reset link for {user.email}: {reset_link}")
+
+            # Later: send_reset_email(user, reset_token.token) — Resend set up cheythaal ivide call cheyyum
+
+        # Email exist cheyyunno illayo ennu leak cheyyaruth, so same message ellarkkum
+        return success_response(
+            message="If this email is registered, a password reset link has been sent.",
+            data=None,
+            status_code=status.HTTP_200_OK
+        )
+
+
+class ResetPasswordView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        token_str = request.data.get('token')
+        new_password = request.data.get('new_password')
+
+        if not token_str or not new_password:
+            return success_response(message="Token and new password are required.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            reset_token = PasswordResetToken.objects.get(token=token_str)
+        except PasswordResetToken.DoesNotExist:
+            return success_response(message="Invalid reset link.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
+
+        if not reset_token.is_valid():
+            return success_response(message="This reset link has expired or already been used.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
+
+        user = reset_token.user
+        user.set_password(new_password)
+        user.save()
+
+        reset_token.is_used = True
+        reset_token.save()
+
+        return success_response(message="Password has been reset successfully.", data=None, status_code=status.HTTP_200_OK)
