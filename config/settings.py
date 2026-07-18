@@ -155,9 +155,9 @@ print("DEBUG CLOUD NAME:", repr(os.environ.get('CLOUDINARY_CLOUD_NAME')))
 print("DEBUG API KEY:", repr(os.environ.get('CLOUDINARY_API_KEY')))
 
 CLOUDINARY_STORAGE = {
-    'CLOUD_NAME': os.environ.get('csmiytcb'),
-    'API_KEY': os.environ.get('438434336418421'),
-    'API_SECRET': os.environ.get('TZxbhVaKDdhaiVN5ojln39woep4'),
+    'CLOUD_NAME': os.environ.get('CLOUDINARY_CLOUD_NAME'),
+    'API_KEY': os.environ.get('CLOUDINARY_API_KEY'),
+    'API_SECRET': os.environ.get('CLOUDINARY_API_SECRET'),
 }
 cloudinary.config(
     cloud_name=os.environ.get('CLOUDINARY_CLOUD_NAME'),
