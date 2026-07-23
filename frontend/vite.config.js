@@ -13,9 +13,9 @@ export default defineConfig({
       includeAssets: ['favicon.ico'],
 
       manifest: {
-        name: 'Chikkundo',
-        short_name: 'Chikkundo',
-        description: 'Find your perfect match',
+        name: 'Lynqo',
+        short_name: 'Lynqo',
+        description: 'Connect Beyond Chats',
         theme_color: '#7C3AED',
         background_color: '#0F172A',
         display: 'standalone',
