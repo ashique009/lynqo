@@ -191,37 +191,37 @@ export const Chat = () => {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-130px)] md:h-[calc(100vh-150px)] max-w-3xl mx-auto glass-panel rounded-3xl border border-brand-purple/10 overflow-hidden bg-brand-dark/15">
+    <div className="flex flex-col h-[calc(100vh-130px)] md:h-[calc(100vh-150px)] max-w-3xl mx-auto glass-panel rounded-3xl border border-[#F4C0D1] dark:border-brand-purple/10 overflow-hidden bg-white/70 dark:bg-brand-dark/15 transition-colors duration-200">
       {/* Chat Header */}
-      <div className="px-5 py-4 border-b border-slate-900 flex items-center justify-between bg-brand-black/45 backdrop-blur-md">
+      <div className="px-5 py-4 border-b border-[#F4C0D1] dark:border-slate-900 flex items-center justify-between bg-white/90 dark:bg-brand-black/45 backdrop-blur-md">
         <div className="flex items-center gap-3">
           <Link
             to="/conversations"
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-200 hover:bg-slate-800/40 transition-colors"
+            className="p-1.5 rounded-lg text-[#5F5E5A] dark:text-slate-400 hover:text-[#2C2C2A] dark:hover:text-slate-200 hover:bg-[#F4C0D1]/30 dark:hover:bg-slate-800/40 transition-colors"
           >
             <ArrowLeft className="w-5 h-5" />
           </Link>
           
           <div className="relative">
-            <div className="w-9 h-9 rounded-full bg-brand-purple/15 flex items-center justify-center border border-brand-purple/25 text-brand-purple-light text-xs font-bold uppercase">
+            <div className="w-9 h-9 rounded-full bg-[#D4537E]/15 dark:bg-brand-purple/15 flex items-center justify-center border border-[#D4537E]/30 dark:border-brand-purple/25 text-[#D4537E] dark:text-brand-purple-light text-xs font-bold uppercase">
               {partner.username ? partner.username.substring(0, 2) : 'CK'}
             </div>
             {onlineStatus?.is_online && (
-              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-slate-950" />
+              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-950" />
             )}
           </div>
 
           <div className="text-left">
-            <h3 className="text-sm font-bold text-slate-200">{partner.full_name}</h3>
+            <h3 className="text-sm font-bold text-[#2C2C2A] dark:text-slate-200">{partner.full_name}</h3>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] text-slate-500 font-semibold">@{partner.username}</span>
+              <span className="text-[10px] text-[#5F5E5A] dark:text-slate-500 font-semibold">@{partner.username}</span>
               {isPartnerTyping ? (
-                <div className="flex items-center gap-1 text-[10px] text-brand-purple-light font-semibold">
+                <div className="flex items-center gap-1 text-[10px] text-[#D4537E] dark:text-brand-purple-light font-semibold">
                   <span className="animate-pulse">typing</span>
                   <span className="flex gap-0.5 items-center">
-                    <span className="w-1 h-1 rounded-full bg-brand-purple-light animate-bounce [animation-delay:-0.3s]" />
-                    <span className="w-1 h-1 rounded-full bg-brand-purple-light animate-bounce [animation-delay:-0.15s]" />
-                    <span className="w-1 h-1 rounded-full bg-brand-purple-light animate-bounce" />
+                    <span className="w-1 h-1 rounded-full bg-[#D4537E] dark:bg-brand-purple-light animate-bounce [animation-delay:-0.3s]" />
+                    <span className="w-1 h-1 rounded-full bg-[#D4537E] dark:bg-brand-purple-light animate-bounce [animation-delay:-0.15s]" />
+                    <span className="w-1 h-1 rounded-full bg-[#D4537E] dark:bg-brand-purple-light animate-bounce" />
                   </span>
                 </div>
               ) : onlineStatus ? (
@@ -229,12 +229,12 @@ export const Chat = () => {
                   {onlineStatus.is_online ? (
                     <>
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block animate-pulse" />
-                      <span className="text-[10px] text-emerald-400 font-semibold">Online</span>
+                      <span className="text-[10px] text-emerald-500 dark:text-emerald-400 font-semibold">Online</span>
                     </>
                   ) : onlineStatus.last_seen ? (
                     <>
-                      <span className="w-1.5 h-1.5 rounded-full bg-slate-500 inline-block" />
-                      <span className="text-[10px] text-slate-400">
+                      <span className="w-1.5 h-1.5 rounded-full bg-slate-400 dark:bg-slate-500 inline-block" />
+                      <span className="text-[10px] text-[#5F5E5A] dark:text-slate-400">
                         Last seen {formatRelativeTime(onlineStatus.last_seen)}
                       </span>
                     </>
@@ -249,10 +249,10 @@ export const Chat = () => {
       {/* Messages Scroll Zone */}
       <div className="flex-grow overflow-y-auto p-5 space-y-4">
         {messages.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-slate-500 text-center gap-2">
-            <User className="w-8 h-8 text-slate-600 mb-2" />
+          <div className="h-full flex flex-col items-center justify-center text-[#5F5E5A] dark:text-slate-500 text-center gap-2">
+            <User className="w-8 h-8 text-[#5F5E5A] dark:text-slate-600 mb-2" />
             <div className="text-xs font-bold">This is the start of your secure chat history.</div>
-            <div className="text-[10px] text-slate-600">Send a message to break the ice!</div>
+            <div className="text-[10px] text-[#5F5E5A] dark:text-slate-600">Send a message to break the ice!</div>
           </div>
         ) : (
           messages.map((msg) => {
@@ -265,14 +265,14 @@ export const Chat = () => {
                 <div
                   className={`max-w-[75%] px-4 py-3 rounded-2xl text-sm ${
                     isMe
-                      ? 'bg-brand-purple text-white rounded-br-none border border-brand-purple-light/20 shadow-md shadow-brand-purple/5'
-                      : 'bg-brand-black/60 text-slate-200 rounded-bl-none border border-slate-800'
+                      ? 'bg-[#D4537E] dark:bg-brand-purple text-white rounded-br-none border border-[#D4537E]/20 dark:border-brand-purple-light/20 shadow-md'
+                      : 'bg-white dark:bg-brand-black/60 text-[#2C2C2A] dark:text-slate-200 rounded-bl-none border border-[#F4C0D1] dark:border-slate-800 shadow-xs'
                   }`}
                 >
                   <p className="leading-relaxed break-words text-left">{msg.content}</p>
                   <div
                     className={`text-[8px] font-semibold mt-1 text-left ${
-                      isMe ? 'text-purple-300' : 'text-slate-500'
+                      isMe ? 'text-pink-100 dark:text-purple-300' : 'text-[#5F5E5A] dark:text-slate-500'
                     }`}
                   >
                     {new Date(msg.created_at).toLocaleTimeString([], {
@@ -289,12 +289,12 @@ export const Chat = () => {
         {/* WhatsApp-style typing indicator bubble in message area */}
         {isPartnerTyping && (
           <div className="flex w-full justify-start animate-fade-in">
-            <div className="bg-brand-black/60 text-slate-400 px-4 py-2 rounded-2xl rounded-bl-none border border-slate-800 flex items-center gap-2 text-xs shadow-sm">
-              <span className="text-brand-purple-light font-medium text-[11px]">{partner.full_name || partner.username} is typing</span>
+            <div className="bg-white dark:bg-brand-black/60 text-[#5F5E5A] dark:text-slate-400 px-4 py-2 rounded-2xl rounded-bl-none border border-[#F4C0D1] dark:border-slate-800 flex items-center gap-2 text-xs shadow-xs">
+              <span className="text-[#D4537E] dark:text-brand-purple-light font-medium text-[11px]">{partner.full_name || partner.username} is typing</span>
               <span className="flex gap-1 items-center">
-                <span className="w-1.5 h-1.5 rounded-full bg-brand-purple-light animate-bounce [animation-delay:-0.3s]" />
-                <span className="w-1.5 h-1.5 rounded-full bg-brand-purple-light animate-bounce [animation-delay:-0.15s]" />
-                <span className="w-1.5 h-1.5 rounded-full bg-brand-purple-light animate-bounce" />
+                <span className="w-1.5 h-1.5 rounded-full bg-[#D4537E] dark:bg-brand-purple-light animate-bounce [animation-delay:-0.3s]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-[#D4537E] dark:bg-brand-purple-light animate-bounce [animation-delay:-0.15s]" />
+                <span className="w-1.5 h-1.5 rounded-full bg-[#D4537E] dark:bg-brand-purple-light animate-bounce" />
               </span>
             </div>
           </div>
@@ -306,7 +306,7 @@ export const Chat = () => {
       {/* Message Input Form */}
       <form
         onSubmit={handleSend}
-        className="p-4 border-t border-slate-900 flex gap-3 bg-brand-black/35 backdrop-blur-md"
+        className="p-4 border-t border-[#F4C0D1] dark:border-slate-900 flex gap-3 bg-white/90 dark:bg-brand-black/35 backdrop-blur-md"
       >
         <input
           type="text"
@@ -319,7 +319,7 @@ export const Chat = () => {
         />
         <button
           type="submit"
-          className="p-3 bg-brand-purple hover:bg-brand-purple-dark text-white rounded-xl border border-brand-purple-light/20 transition-all duration-200 flex items-center justify-center flex-shrink-0 cursor-pointer shadow-md shadow-brand-purple/10 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="p-3 bg-[#D4537E] hover:bg-[#c2436d] dark:bg-brand-purple dark:hover:bg-brand-purple-dark text-white rounded-xl border border-transparent dark:border-brand-purple-light/20 transition-all duration-200 flex items-center justify-center flex-shrink-0 cursor-pointer shadow-md shadow-[#D4537E]/10 dark:shadow-brand-purple/10 disabled:opacity-50 disabled:cursor-not-allowed"
           disabled={sending || !newMessage.trim()}
         >
           <Send className="w-4.5 h-4.5" />

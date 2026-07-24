@@ -2,10 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import { useTheme } from '../context/ThemeContext';
 import { profileService } from '../services/profileService';
 import { authService } from '../services/authService';
 import Loader from '../components/Loader';
-import { Upload, Check, Save, LogOut, Bell, BellOff, Download } from 'lucide-react';
+import { Upload, Check, Save, LogOut, Bell, BellOff, Download, Sun, Moon } from 'lucide-react';
 import { API_BASE_URL } from '../api/client';
 
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || 'BD57u82r0XebhNJL2PE0cGdLCsGv3zD8iNkTXp2blUwT6rrfm46ws_w5cxbMqMLJsGTfx6Tewq6qtQeOI9eYKc8';
@@ -28,6 +29,7 @@ function urlBase64ToUint8Array(base64String) {
 export const Settings = () => {
   const { userProfile, refreshProfile, logout } = useAuth();
   const { showToast } = useToast();
+  const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
 
   // Form states
@@ -495,6 +497,46 @@ export const Settings = () => {
 
         {/* Sidebar Cards */}
         <div className="space-y-6">
+          {/* Appearance & Theme Card */}
+          <div className="glass-panel p-6 rounded-3xl border border-[#F4C0D1] dark:border-brand-purple/10 bg-white dark:bg-brand-dark/15 flex flex-col gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-xl bg-[#D4537E]/10 dark:bg-brand-purple/10 border border-[#D4537E]/20 dark:border-brand-purple/20">
+                {theme === 'dark' ? (
+                  <Moon className="w-5 h-5 text-brand-purple-light" />
+                ) : (
+                  <Sun className="w-5 h-5 text-[#D4537E]" />
+                )}
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-[#2C2C2A] dark:text-slate-200">Appearance</h3>
+                <span className="text-[10px] text-[#5F5E5A] dark:text-slate-500 font-semibold uppercase">
+                  {theme === 'dark' ? 'Dark Mode Active' : 'Light Mode Active'}
+                </span>
+              </div>
+            </div>
+            <p className="text-xs text-[#5F5E5A] dark:text-slate-400 leading-relaxed">
+              Switch between soft pink light theme and sleek dark purple workspace aesthetics.
+            </p>
+            
+            <button
+              type="button"
+              onClick={toggleTheme}
+              className="w-full font-bold py-3 rounded-xl transition-all duration-200 cursor-pointer flex items-center justify-center gap-2 text-xs border bg-[#D4537E] hover:bg-[#c2436d] text-white border-transparent shadow-md dark:bg-brand-purple dark:hover:bg-brand-purple-dark dark:border-brand-purple-light/20 shadow-brand-purple/10"
+            >
+              {theme === 'dark' ? (
+                <>
+                  <Sun className="w-4 h-4" />
+                  <span>Switch to Light Mode</span>
+                </>
+              ) : (
+                <>
+                  <Moon className="w-4 h-4" />
+                  <span>Switch to Dark Mode</span>
+                </>
+              )}
+            </button>
+          </div>
+
           {/* Push Notifications Card */}
           <div className="glass-panel p-6 rounded-3xl border border-brand-purple/10 bg-brand-dark/15 flex flex-col gap-4">
             <div className="flex items-center gap-3">

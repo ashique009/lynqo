@@ -43,8 +43,8 @@ export const Sidebar = () => {
       ];
 
   return (
-    <aside className="w-64 glass-panel border-r border-brand-purple/10 min-h-[calc(100vh-65px)] p-4 flex-shrink-0 flex-col gap-1 hidden md:flex bg-brand-dark/20 z-10">
-      <div className="text-[10px] font-extrabold uppercase tracking-widest text-slate-500 mb-3 px-3">
+    <aside className="w-64 glass-panel border-r border-[#F4C0D1] dark:border-brand-purple/10 min-h-[calc(100vh-65px)] p-4 flex-shrink-0 flex-col gap-1 hidden md:flex bg-white/70 dark:bg-brand-dark/20 z-10 transition-colors duration-200">
+      <div className="text-[10px] font-extrabold uppercase tracking-widest text-[#5F5E5A] dark:text-slate-500 mb-3 px-3">
         {isAdminPath ? 'Admin Console' : 'Navigation'}
       </div>
       <div className="flex flex-col gap-1.5 flex-grow">
@@ -57,8 +57,8 @@ export const Sidebar = () => {
               className={({ isActive }) =>
                 `flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all duration-200 cursor-pointer ${
                   isActive
-                    ? 'bg-brand-purple/20 text-brand-purple-light border border-brand-purple/30 shadow-md shadow-brand-purple/5'
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/20 border border-transparent'
+                    ? 'bg-[#D4537E]/15 text-[#D4537E] border border-[#D4537E]/30 shadow-xs dark:bg-brand-purple/20 dark:text-brand-purple-light dark:border-brand-purple/30 shadow-brand-purple/5'
+                    : 'text-[#5F5E5A] dark:text-slate-400 hover:text-[#2C2C2A] dark:hover:text-slate-200 hover:bg-[#D4537E]/10 dark:hover:bg-slate-800/20 border border-transparent'
                 }`
               }
             >
@@ -70,7 +70,7 @@ export const Sidebar = () => {
         {isAdminPath && (
           <button
             onClick={handleLogout}
-            className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold text-rose-400 hover:text-rose-350 hover:bg-rose-500/10 border border-transparent transition-all duration-200 cursor-pointer w-full text-left"
+            className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 border border-transparent transition-all duration-200 cursor-pointer w-full text-left"
           >
             <LogOut className="w-5 h-5" />
             <span>Logout</span>
@@ -78,18 +78,18 @@ export const Sidebar = () => {
         )}
       </div>
       
-      <div className="p-3 bg-brand-purple/5 border border-brand-purple/10 rounded-xl mt-auto">
-        <div className="text-xs font-bold text-slate-300 font-display flex items-center gap-1.5">
+      <div className="p-3 bg-[#D4537E]/5 dark:bg-brand-purple/5 border border-[#F4C0D1] dark:border-brand-purple/10 rounded-xl mt-auto">
+        <div className="text-xs font-bold text-[#2C2C2A] dark:text-slate-300 font-display flex items-center gap-1.5">
           {isAdminPath ? (
             <>
-              <ShieldCheck className="w-3.5 h-3.5 text-brand-purple-light" />
-              <span className="text-brand-purple-light">Lynqo Admin</span>
+              <ShieldCheck className="w-3.5 h-3.5 text-[#D4537E] dark:text-brand-purple-light" />
+              <span className="text-[#D4537E] dark:text-brand-purple-light">Lynqo Admin</span>
             </>
           ) : (
             <span>Lynqo MVP</span>
           )}
         </div>
-        <div className="text-[10px] text-slate-500 mt-1">
+        <div className="text-[10px] text-[#5F5E5A] dark:text-slate-500 mt-1">
           {isAdminPath ? 'System Administration' : 'Connect Beyond Chats.'}
         </div>
       </div>

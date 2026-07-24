@@ -61,11 +61,11 @@ export const ConversationList = () => {
   return (
     <div className="space-y-6 text-left max-w-2xl mx-auto">
       <div>
-        <h2 className="text-2xl font-extrabold font-display text-slate-100 flex items-center gap-2">
-          <MessageCircle className="w-6 h-6 text-brand-purple-light" />
+        <h2 className="text-2xl font-extrabold font-display text-[#2C2C2A] dark:text-slate-100 flex items-center gap-2">
+          <MessageCircle className="w-6 h-6 text-[#D4537E] dark:text-brand-purple-light" />
           <span>Conversations</span>
         </h2>
-        <p className="text-slate-400 text-xs mt-1">
+        <p className="text-[#5F5E5A] dark:text-slate-400 text-xs mt-1">
           Chat securely with approved connection matches.
         </p>
       </div>
@@ -94,46 +94,46 @@ export const ConversationList = () => {
               >
                 <Link
                   to={`/chat/${convo.id}`}
-                  className="glass-panel p-4 rounded-xl border border-brand-purple/10 flex items-center justify-between gap-4 bg-brand-dark/15 hover:border-brand-purple/35 hover:bg-brand-purple/5 transition-all duration-300 group cursor-pointer shadow-md"
+                  className="glass-panel p-4 rounded-xl border border-[#F4C0D1] dark:border-brand-purple/10 flex items-center justify-between gap-4 bg-white dark:bg-brand-dark/15 hover:border-[#D4537E]/40 dark:hover:border-brand-purple/35 hover:bg-[#D4537E]/5 dark:hover:bg-brand-purple/5 transition-all duration-300 group cursor-pointer shadow-md"
                 >
                   <div className="flex items-center gap-3.5 min-w-0 flex-grow">
                     <div className="relative flex-shrink-0">
-                      <div className="w-11 h-11 rounded-full bg-brand-purple/15 flex items-center justify-center border border-brand-purple/25 text-brand-purple-light text-sm font-extrabold uppercase">
+                      <div className="w-11 h-11 rounded-full bg-[#D4537E]/15 dark:bg-brand-purple/15 flex items-center justify-center border border-[#D4537E]/30 dark:border-brand-purple/25 text-[#D4537E] dark:text-brand-purple-light text-sm font-extrabold uppercase">
                         {partner.username ? partner.username.substring(0, 2) : 'CK'}
                       </div>
                       {isOnline && (
-                        <span className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-emerald-500 ring-2 ring-slate-950" />
+                        <span className="absolute bottom-0 right-0 w-3 h-3 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-950" />
                       )}
                     </div>
 
                     <div className="min-w-0 flex-grow">
                       <div className="flex justify-between items-baseline gap-2">
-                        <h4 className="font-bold text-sm text-slate-200 group-hover:text-brand-purple-light transition-colors truncate">
+                        <h4 className="font-bold text-sm text-[#2C2C2A] dark:text-slate-200 group-hover:text-[#D4537E] dark:group-hover:text-brand-purple-light transition-colors truncate">
                           {partner.full_name || partner.username}
                         </h4>
                         {lastMsg && (
-                          <span className="text-[10px] text-slate-500 font-semibold flex-shrink-0">
+                          <span className="text-[10px] text-[#5F5E5A] dark:text-slate-500 font-semibold flex-shrink-0">
                             {formatMessageTime(lastMsg.created_at)}
                           </span>
                         )}
                       </div>
                       
-                      <p className="text-xs text-slate-400 font-medium truncate mt-1">
+                      <p className="text-xs text-[#5F5E5A] dark:text-slate-400 font-medium truncate mt-1">
                         {lastMsg ? (
                           <span>
-                            <strong className="text-slate-500 font-bold">
+                            <strong className="text-[#5F5E5A] dark:text-slate-500 font-bold">
                               {lastMsg.sender === partner.username ? 'They: ' : 'You: '}
                             </strong>
                             {lastMsg.content}
                           </span>
                         ) : (
-                          <span className="text-slate-500 italic">No messages sent yet. Say hello!</span>
+                          <span className="text-[#5F5E5A] dark:text-slate-500 italic">No messages sent yet. Say hello!</span>
                         )}
                       </p>
                     </div>
                   </div>
 
-                  <ChevronRight className="w-5 h-5 text-slate-500 group-hover:text-slate-300 transition-colors flex-shrink-0" />
+                  <ChevronRight className="w-5 h-5 text-[#5F5E5A] dark:text-slate-500 group-hover:text-[#2C2C2A] dark:group-hover:text-slate-300 transition-colors flex-shrink-0" />
                 </Link>
               </motion.div>
             );

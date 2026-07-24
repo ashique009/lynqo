@@ -29,7 +29,7 @@ export const BottomNavigation = () => {
       ];
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-40 md:hidden glass-panel border-t border-brand-purple/10 px-2 py-2 flex items-center justify-around shadow-2xl bg-brand-black/75 backdrop-blur-lg pb-safe-bottom">
+    <nav className="fixed bottom-0 left-0 right-0 z-40 md:hidden glass-panel border-t border-[#F4C0D1] dark:border-brand-purple/10 px-2 py-2 flex items-center justify-around shadow-2xl bg-white/90 dark:bg-brand-black/75 backdrop-blur-lg pb-safe-bottom transition-colors duration-200">
       {navItems.map((item) => {
         const Icon = item.icon;
         return (
@@ -39,8 +39,8 @@ export const BottomNavigation = () => {
             className={({ isActive }) =>
               `flex flex-col items-center justify-center flex-1 py-1 rounded-lg gap-1 transition-all duration-200 ${
                 isActive
-                  ? 'text-brand-purple-light'
-                  : 'text-slate-500 hover:text-slate-300'
+                  ? 'text-[#D4537E] dark:text-brand-purple-light font-extrabold'
+                  : 'text-[#5F5E5A] dark:text-slate-500 hover:text-[#2C2C2A] dark:hover:text-slate-300'
               }`
             }
           >
