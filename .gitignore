@@ -18,3 +18,8 @@ profile_pics/
 
 # OS
 .DS_Store
+
+# Secrets
+*.pem
+private_key.pem
+public_key.pem

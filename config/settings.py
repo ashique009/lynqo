@@ -13,19 +13,21 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 from pathlib import Path
 import os
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
-
-# SECURITY WARNING: keep the secret key used in production secret!
 load_dotenv()
-SECRET_KEY = os.getenv('SECRET_KEY')
-# SECURITY WARNING: don't run with debug turned on in production!
+
 DEBUG = os.getenv("DEBUG", "False") == "True"
+
+SECRET_KEY = os.getenv('SECRET_KEY')
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = 'django-insecure-dev-only-change-me'
+    else:
+        raise ImproperlyConfigured('SECRET_KEY environment variable is required in production.')
 
 ALLOWED_HOSTS = [
     ".onrender.com",
@@ -104,6 +106,15 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.UserRateThrottle',
+        'rest_framework.throttling.AnonRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'user': '120/min',
+        'anon': '30/min',
+        'auth': '10/min',
+    },
     'EXCEPTION_HANDLER': 'accounts.utils.custom_exception_handler',
 }
 
@@ -152,8 +163,6 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 import cloudinary
-print("DEBUG CLOUD NAME:", repr(os.environ.get('CLOUDINARY_CLOUD_NAME')))
-print("DEBUG API KEY:", repr(os.environ.get('CLOUDINARY_API_KEY')))
 
 CLOUDINARY_STORAGE = {
     'CLOUD_NAME': os.environ.get('CLOUDINARY_CLOUD_NAME'),
@@ -177,6 +186,18 @@ STORAGES = {
 VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY')
 VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY')
 VAPID_ADMIN_EMAIL = os.environ.get('VAPID_ADMIN_EMAIL')
+
+FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://lynqoweb.vercel.app')
+
+if not DEBUG:
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS
 
 LOGGING = {
     'version': 1,
