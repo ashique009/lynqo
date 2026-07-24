@@ -130,14 +130,13 @@ class MessageSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Message
-        fields = ['id', 'conversation', 'sender', 'sender_username', 'content', 'is_read', 'created_at']
-        read_only_fields = ['sender', 'is_read', 'created_at']
+        fields = ['id', 'conversation', 'sender', 'sender_username', 'content', 'is_read', 'is_edited', 'is_deleted', 'created_at']
+        read_only_fields = ['sender', 'is_read', 'is_edited', 'is_deleted', 'created_at']
 
     def validate_content(self, value):
         if not value or not value.strip():
             raise serializers.ValidationError("Message cannot be empty.")
         return value
-
 #conversation serializer
 class ConversationSerializer(serializers.ModelSerializer):
     other_participant = serializers.SerializerMethodField()

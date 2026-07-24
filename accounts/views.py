@@ -636,3 +636,49 @@ class TypingStatusView(APIView):
             is_typing = time_diff.total_seconds() < 4  # 4 seconds il signal undenkil "typing"
 
         return success_response(message="Typing status fetched", data={"is_typing": is_typing}, status_code=status.HTTP_200_OK)
+
+class EditMessageView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def put(self, request, message_id):
+        try:
+            message = Message.objects.get(id=message_id)
+        except Message.DoesNotExist:
+            return success_response(message="Message not found.", data=None, status_code=status.HTTP_404_NOT_FOUND)
+
+        if message.sender != request.user:
+            return success_response(message="You can only edit your own messages.", data=None, status_code=status.HTTP_403_FORBIDDEN)
+
+        if message.is_deleted:
+            return success_response(message="Cannot edit a deleted message.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
+
+        new_content = request.data.get('content')
+        if not new_content or not new_content.strip():
+            return success_response(message="Message cannot be empty.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
+
+        message.content = new_content.strip()
+        message.is_edited = True
+        message.save()
+
+        serializer = MessageSerializer(message)
+        return success_response(message="Message edited.", data=serializer.data, status_code=status.HTTP_200_OK)
+
+
+class DeleteMessageView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request, message_id):
+        try:
+            message = Message.objects.get(id=message_id)
+        except Message.DoesNotExist:
+            return success_response(message="Message not found.", data=None, status_code=status.HTTP_404_NOT_FOUND)
+
+        if message.sender != request.user:
+            return success_response(message="You can only delete your own messages.", data=None, status_code=status.HTTP_403_FORBIDDEN)
+
+        message.is_deleted = True
+        message.content = ""
+        message.save()
+
+        serializer = MessageSerializer(message)
+        return success_response(message="Message deleted.", data=serializer.data, status_code=status.HTTP_200_OK)
