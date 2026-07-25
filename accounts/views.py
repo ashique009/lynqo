@@ -7,7 +7,8 @@ from django.db import models
 from django.utils import timezone
 from datetime import timedelta
 from .utils import success_response, IsAdminUser, send_push_notification,send_otp_email, generate_otp
-
+import resend
+from django.conf import settings as django_settings
 from .serializers import (
     SignupSerializer, LoginSerializer, ProfileSerializer,
     InterestSerializer, ConnectRequestSerializer,
@@ -745,3 +746,46 @@ class ResendOTPView(APIView):
         send_otp_email(user, otp_code)
 
         return success_response(message="A new verification code has been sent to your email.", data=None, status_code=status.HTTP_200_OK)
+
+class DeleteAccountView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        password = request.data.get('password')
+
+        if not password:
+            return success_response(message="Password is required to delete your account.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
+
+        user = authenticate(username=request.user.username, password=password)
+        if user is None:
+            return success_response(message="Incorrect password.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
+
+        username = request.user.username
+        request.user.delete()
+        return success_response(message=f"Account '{username}' has been permanently deleted.", data=None, status_code=status.HTTP_200_OK)
+
+
+class ContactUsView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        name = request.data.get('name')
+        email = request.data.get('email')
+        message = request.data.get('message')
+
+        if not name or not email or not message:
+            return success_response(message="Name, email, and message are required.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            resend.api_key = django_settings.RESEND_API_KEY
+            resend.Emails.send({
+                "from": "onboarding@resend.dev",
+                "to": "lynqoadmin111@gmail.com",
+                "subject": f"Lynqo Contact Form: {name}",
+                "html": f"<p><strong>From:</strong> {name} ({email})</p><p><strong>Message:</strong></p><p>{message}</p>"
+            })
+        except Exception as e:
+            print(f"Failed to send contact email: {e}")
+            return success_response(message="Failed to send message. Please try again later.", data=None, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return success_response(message="Your message has been sent. We'll get back to you soon.", data=None, status_code=status.HTTP_200_OK)

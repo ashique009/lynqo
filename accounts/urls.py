@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import (
-    ResendOTPView, SignupView, LoginView, LogoutView,
+    ContactUsView, DeleteAccountView, ResendOTPView, SignupView, LoginView, LogoutView,
     ProfileCreateView, ProfileDetailView, ProfileUpdateView,
     InterestListView,
     SendConnectRequestView, PendingRequestsView, SentRequestsView,
@@ -55,5 +55,7 @@ urlpatterns = [
     path('messages/<int:message_id>/delete/', DeleteMessageView.as_view(), name='message-delete'),
     path('verify-email/', VerifyEmailView.as_view(), name='verify-email'),
     path('resend-otp/', ResendOTPView.as_view(), name='resend-otp'),
+    path('account/delete/', DeleteAccountView.as_view(), name='account-delete'),
+    path('contact-us/', ContactUsView.as_view(), name='contact-us'),
 ]
 
