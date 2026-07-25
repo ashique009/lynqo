@@ -186,6 +186,7 @@ STORAGES = {
 VAPID_PUBLIC_KEY = os.environ.get('VAPID_PUBLIC_KEY')
 VAPID_PRIVATE_KEY = os.environ.get('VAPID_PRIVATE_KEY')
 VAPID_ADMIN_EMAIL = os.environ.get('VAPID_ADMIN_EMAIL')
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY')
 
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://lynqoweb.vercel.app')
 

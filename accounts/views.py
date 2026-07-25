@@ -6,15 +6,14 @@ from django.contrib.auth import authenticate, get_user_model
 from django.db import models
 from django.utils import timezone
 from datetime import timedelta
-from .utils import success_response, IsAdminUser, send_push_notification
+from .utils import success_response, IsAdminUser, send_push_notification,send_otp_email, generate_otp
 
 from .serializers import (
     SignupSerializer, LoginSerializer, ProfileSerializer,
     InterestSerializer, ConnectRequestSerializer,
     ConversationSerializer, MessageSerializer,AdminUserListSerializer
 )
-from .models import Profile, Interest, ConnectRequest, Conversation, Message,PasswordResetToken,PushSubscription,TypingStatus
-
+from .models import Profile, Interest, ConnectRequest, Conversation, Message,PasswordResetToken,PushSubscription,TypingStatus,EmailOTP
 
 User = get_user_model()
 
@@ -27,8 +26,14 @@ class SignupView(APIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         token, _ = Token.objects.get_or_create(user=user)
+
+        # Email OTP ayakkuka
+        otp_code = generate_otp()
+        EmailOTP.objects.create(user=user, otp_code=otp_code)
+        send_otp_email(user, otp_code)
+
         return success_response(
-            message="Signup successful",
+            message="Signup successful. Please check your email for the verification code.",
             data={"token": token.key, "username": user.username},
             status_code=status.HTTP_201_CREATED
         )
@@ -58,6 +63,12 @@ class LoginView(APIView):
             return success_response(
                 message="Your account has been banned. Please contact support.",
                 data=None,
+                status_code=status.HTTP_403_FORBIDDEN
+            )
+        if not user.is_email_verified:
+            return success_response(
+                message="Please verify your email before logging in.",
+                data={"email_verification_required": True, "user_id": user.id},
                 status_code=status.HTTP_403_FORBIDDEN
             )
         token, _ = Token.objects.get_or_create(user=user)
@@ -680,3 +691,57 @@ class DeleteMessageView(APIView):
 
         serializer = MessageSerializer(message)
         return success_response(message="Message deleted.", data=serializer.data, status_code=status.HTTP_200_OK)
+
+class VerifyEmailView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        user_id = request.data.get('user_id')
+        otp_code = request.data.get('otp_code')
+
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return success_response(message="User not found.", data=None, status_code=status.HTTP_404_NOT_FOUND)
+
+        if user.is_email_verified:
+            return success_response(message="Email already verified.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
+
+        otp_obj = EmailOTP.objects.filter(user=user, otp_code=otp_code, is_used=False).order_by('-created_at').first()
+
+        if not otp_obj or not otp_obj.is_valid():
+            return success_response(message="Invalid or expired OTP.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
+
+        otp_obj.is_used = True
+        otp_obj.save()
+
+        user.is_email_verified = True
+        user.save()
+
+        token, _ = Token.objects.get_or_create(user=user)
+        return success_response(
+            message="Email verified successfully.",
+            data={"token": token.key, "username": user.username},
+            status_code=status.HTTP_200_OK
+        )
+
+
+class ResendOTPView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        user_id = request.data.get('user_id')
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return success_response(message="User not found.", data=None, status_code=status.HTTP_404_NOT_FOUND)
+
+        if user.is_email_verified:
+            return success_response(message="Email already verified.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
+
+        EmailOTP.objects.filter(user=user, is_used=False).update(is_used=True)
+        otp_code = generate_otp()
+        EmailOTP.objects.create(user=user, otp_code=otp_code)
+        send_otp_email(user, otp_code)
+
+        return success_response(message="A new verification code has been sent to your email.", data=None, status_code=status.HTTP_200_OK)

@@ -1,6 +1,6 @@
 from django.urls import path
 from .views import (
-    SignupView, LoginView, LogoutView,
+    ResendOTPView, SignupView, LoginView, LogoutView,
     ProfileCreateView, ProfileDetailView, ProfileUpdateView,
     InterestListView,
     SendConnectRequestView, PendingRequestsView, SentRequestsView,
@@ -10,7 +10,7 @@ from .views import (
     SendMessageView, GetMessagesView,
     AdminLoginView,AdminDashboardStatsView, AdminUserListView, AdminUserBanView, AdminUserUnbanView,
     AdminUserDeleteView,NotificationCountView,ForgotPasswordView, ResetPasswordView,PushSubscribeView, PushUnsubscribeView,OnlineStatusView,
-    TypingIndicatorView, TypingStatusView,EditMessageView, DeleteMessageView
+    TypingIndicatorView, TypingStatusView,EditMessageView, DeleteMessageView, VerifyEmailView
 )
 
 urlpatterns = [
@@ -53,4 +53,7 @@ urlpatterns = [
     path('messages/typing-status/<int:conversation_id>/', TypingStatusView.as_view(), name='typing-status'),
     path('messages/<int:message_id>/edit/', EditMessageView.as_view(), name='message-edit'),
     path('messages/<int:message_id>/delete/', DeleteMessageView.as_view(), name='message-delete'),
+    path('verify-email/', VerifyEmailView.as_view(), name='verify-email'),
+    path('resend-otp/', ResendOTPView.as_view(), name='resend-otp'),
 ]
+

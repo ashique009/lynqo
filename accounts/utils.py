@@ -71,3 +71,22 @@ class IsAdminUser(permissions.BasePermission):
     def has_permission(self, request, view):
         return bool(request.user and request.user.is_authenticated and request.user.is_staff)
     
+import resend
+import random
+from django.conf import settings as django_settings
+
+def send_otp_email(user, otp_code):
+    resend.api_key = django_settings.RESEND_API_KEY
+    try:
+        resend.Emails.send({
+            "from": "onboarding@resend.dev",
+            "to": user.email,
+            "subject": "Verify your Lynqo account",
+            "html": f"<p>Hi {user.full_name or user.username},</p><p>Your verification code is:</p><h2>{otp_code}</h2><p>This code expires in 10 minutes.</p>"
+        })
+    except Exception as e:
+        print(f"Failed to send OTP email: {e}")
+
+
+def generate_otp():
+    return str(random.randint(100000, 999999))
