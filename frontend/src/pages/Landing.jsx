@@ -23,7 +23,7 @@ export const Landing = () => {
     {
       icon: Sparkles,
       title: 'Smart Suggestions',
-      desc: 'Connect with people sharing matching interest parameters and city settings.'
+      desc: 'Connect with people in your city effortlessly.'
     },
     {
       icon: MessageSquare,

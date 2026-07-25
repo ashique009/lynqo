@@ -12,8 +12,7 @@ import {
   AlertCircle, 
   Calendar, 
   RefreshCw, 
-  User, 
-  SlidersHorizontal 
+  User 
 } from 'lucide-react';
 import Loader from '../components/Loader';
 import Modal from '../components/Modal';
@@ -25,7 +24,6 @@ export default function AdminUsers() {
   const [search, setSearch] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [genderFilter, setGenderFilter] = useState('all');
   const [isLoading, setIsLoading] = useState(true);
   const [actionInProgress, setActionInProgress] = useState({ userId: null, actionType: null });
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
@@ -46,7 +44,6 @@ export default function AdminUsers() {
       const params = {};
       if (debouncedSearch.trim()) params.search = debouncedSearch.trim();
       if (statusFilter !== 'all') params.status = statusFilter;
-      if (genderFilter !== 'all') params.gender = genderFilter;
 
       const res = await getUsers(params);
       if (res && res.success) {
@@ -63,7 +60,7 @@ export default function AdminUsers() {
 
   useEffect(() => {
     fetchUsers();
-  }, [debouncedSearch, statusFilter, genderFilter]);
+  }, [debouncedSearch, statusFilter]);
 
   const handleBan = async (userId) => {
     setActionInProgress({ userId, actionType: 'ban' });
@@ -128,7 +125,6 @@ export default function AdminUsers() {
   const clearFilters = () => {
     setSearch('');
     setStatusFilter('all');
-    setGenderFilter('all');
   };
 
   const getProfilePicUrl = (pic) => {
@@ -156,15 +152,9 @@ export default function AdminUsers() {
     const initials = user.username ? user.username.substring(0, 2).toUpperCase() : 'CK';
     
     let gradientClass = 'from-purple-600 to-indigo-600';
-    if (user.gender === 'F') {
-      gradientClass = 'from-pink-500 to-rose-500';
-    } else if (user.gender === 'M') {
-      gradientClass = 'from-blue-500 to-indigo-500';
-    } else {
-      const charCode = user.username ? user.username.charCodeAt(0) : 0;
-      if (charCode % 3 === 0) gradientClass = 'from-violet-500 to-pink-500';
-      else if (charCode % 3 === 1) gradientClass = 'from-emerald-500 to-teal-500';
-    }
+    const charCode = user.username ? user.username.charCodeAt(0) : 0;
+    if (charCode % 3 === 0) gradientClass = 'from-violet-500 to-pink-500';
+    else if (charCode % 3 === 1) gradientClass = 'from-emerald-500 to-teal-500';
 
     if (profileUrl) {
       return (
@@ -195,28 +185,6 @@ export default function AdminUsers() {
     );
   };
 
-  const renderGender = (gender) => {
-    if (gender === 'M') {
-      return (
-        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold bg-blue-500/10 border border-blue-500/20 text-blue-400">
-          Male
-        </span>
-      );
-    }
-    if (gender === 'F') {
-      return (
-        <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold bg-rose-500/10 border border-rose-500/20 text-rose-400">
-          Female
-        </span>
-      );
-    }
-    return (
-      <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-semibold bg-slate-500/10 border border-slate-500/20 text-slate-400">
-        N/A
-      </span>
-    );
-  };
-
   const containerVariants = {
     hidden: { opacity: 0 },
     show: { opacity: 1, transition: { staggerChildren: 0.02 } }
@@ -227,7 +195,7 @@ export default function AdminUsers() {
     show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 260, damping: 22 } }
   };
 
-  const hasActiveFilters = search || statusFilter !== 'all' || genderFilter !== 'all';
+  const hasActiveFilters = search || statusFilter !== 'all';
 
   return (
     <div className="space-y-8 py-4 px-2 md:px-0">
@@ -244,7 +212,7 @@ export default function AdminUsers() {
 
       <div className="bg-brand-card backdrop-blur-md border border-brand-purple/10 p-5 rounded-2xl shadow-xl space-y-4">
         <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-          <div className="md:col-span-5 relative w-full group">
+          <div className="md:col-span-7 relative w-full group">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 group-focus-within:text-brand-purple-light transition-colors" />
             <input
               type="text"
@@ -290,21 +258,6 @@ export default function AdminUsers() {
             </button>
           </div>
 
-          <div className="md:col-span-2 relative">
-            <select
-              value={genderFilter}
-              onChange={(e) => setGenderFilter(e.target.value)}
-              className="w-full px-4 py-2.5 bg-brand-black/60 border border-brand-purple/15 rounded-xl text-white outline-none transition-all duration-300 text-sm font-medium focus:border-brand-purple cursor-pointer appearance-none"
-            >
-              <option value="all">All Genders</option>
-              <option value="M">Male</option>
-              <option value="F">Female</option>
-            </select>
-            <div className="absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-              <SlidersHorizontal className="w-3.5 h-3.5" />
-            </div>
-          </div>
-
           <div className="md:col-span-1 flex justify-end gap-2">
             <button
               onClick={fetchUsers}
@@ -324,7 +277,6 @@ export default function AdminUsers() {
               <span>
                 Filters active: {search && `Search "${search}"`}
                 {statusFilter !== 'all' && ` • Status: ${statusFilter}`}
-                {genderFilter !== 'all' && ` • Gender: ${genderFilter === 'M' ? 'Male' : 'Female'}`}
               </span>
             </div>
             <button 
@@ -366,7 +318,6 @@ export default function AdminUsers() {
                   <th className="py-4 px-4">Username</th>
                   <th className="py-4 px-4">Full Name</th>
                   <th className="py-4 px-4">Email</th>
-                  <th className="py-4 px-4 w-24">Gender</th>
                   <th className="py-4 px-4">City</th>
                   <th className="py-4 px-4 w-32">Joined Date</th>
                   <th className="py-4 px-4 w-28">Status</th>
@@ -407,7 +358,6 @@ export default function AdminUsers() {
                             <span className="truncate max-w-[180px]">{u.email}</span>
                           </div>
                         </td>
-                        <td className="py-4 px-4">{renderGender(u.gender)}</td>
                         <td className="py-4 px-4 text-sm text-slate-300">
                           <div className="flex items-center gap-1.5">
                             <MapPin className="w-3.5 h-3.5 text-slate-500" />

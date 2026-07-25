@@ -1,17 +1,11 @@
 import client from '../api/client';
 
-// Helper to convert object into FormData for file upload and Django arrays
+// Helper to convert object into FormData for file upload
 const buildProfileFormData = (data) => {
   const formData = new FormData();
   
   Object.keys(data).forEach((key) => {
-    if (key === 'interest_ids') {
-      if (Array.isArray(data[key])) {
-        data[key].forEach((id) => {
-          formData.append('interest_ids', id);
-        });
-      }
-    } else if (key === 'profile_picture') {
+    if (key === 'profile_picture') {
       // Only append if it's a File object (user selected a new file)
       if (data[key] instanceof File) {
         formData.append('profile_picture', data[key]);
@@ -25,10 +19,6 @@ const buildProfileFormData = (data) => {
 };
 
 export const profileService = {
-  async getInterests() {
-    return client.get('/api/auth/interests/');
-  },
-
   async getProfileDetail() {
     return client.get('/api/auth/profile/');
   },

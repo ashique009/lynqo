@@ -6,7 +6,7 @@ import { useTheme } from '../context/ThemeContext';
 import { profileService } from '../services/profileService';
 import { authService } from '../services/authService';
 import Loader from '../components/Loader';
-import { Upload, Check, Save, LogOut, Bell, BellOff, Download, Sun, Moon } from 'lucide-react';
+import { Upload, Save, LogOut, Bell, BellOff, Download, Sun, Moon } from 'lucide-react';
 import { API_BASE_URL } from '../api/client';
 
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || 'BD57u82r0XebhNJL2PE0cGdLCsGv3zD8iNkTXp2blUwT6rrfm46ws_w5cxbMqMLJsGTfx6Tewq6qtQeOI9eYKc8';
@@ -35,14 +35,7 @@ export const Settings = () => {
   // Form states
   const [profilePicture, setProfilePicture] = useState(null);
   const [picturePreview, setPicturePreview] = useState(null);
-  const [bio, setBio] = useState('');
-  const [address, setAddress] = useState('');
   const [city, setCity] = useState('');
-  const [state, setState] = useState('');
-  const [pincode, setPincode] = useState('');
-  const [lookingFor, setLookingFor] = useState('friendship');
-  const [selectedInterests, setSelectedInterests] = useState([]);
-  const [interestsList, setInterestsList] = useState([]);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -206,20 +199,11 @@ export const Settings = () => {
   useEffect(() => {
     const initializeForm = async () => {
       try {
-        const [profileRes, interestsRes] = await Promise.all([
-          profileService.getProfileDetail(),
-          profileService.getInterests()
-        ]);
+        const profileRes = await profileService.getProfileDetail();
 
         if (profileRes.success && profileRes.data) {
           const profile = profileRes.data;
-          setBio(profile.bio || '');
-          setAddress(profile.address || '');
           setCity(profile.city || '');
-          setState(profile.state || '');
-          setPincode(profile.pincode || '');
-          setLookingFor(profile.looking_for || 'friendship');
-          setSelectedInterests(profile.interests.map(i => i.id));
           
           if (profile.profile_picture) {
             if (profile.profile_picture.startsWith('http')) {
@@ -228,10 +212,6 @@ export const Settings = () => {
               setPicturePreview(`${API_BASE_URL}${profile.profile_picture}`);
             }
           }
-        }
-
-        if (interestsRes.success && interestsRes.data) {
-          setInterestsList(interestsRes.data);
         }
       } catch (err) {
         showToast('Failed to load settings details.', 'error');
@@ -251,36 +231,13 @@ export const Settings = () => {
     }
   };
 
-  const handleInterestToggle = (id) => {
-    setSelectedInterests((prev) =>
-      prev.includes(id)
-        ? prev.filter((item) => item !== id)
-        : [...prev, id]
-    );
-  };
-
   const handleSave = async (e) => {
     e.preventDefault();
-
-    if (selectedInterests.length < 3) {
-      showToast('Please select at least 3 interests.', 'error');
-      return;
-    }
-    if (selectedInterests.length > 10) {
-      showToast('You can select a maximum of 10 interests.', 'error');
-      return;
-    }
 
     setSaving(true);
     
     const payload = {
-      bio: bio.trim(),
-      address: address.trim(),
       city: city.trim(),
-      state: state.trim(),
-      pincode: pincode.trim(),
-      looking_for: lookingFor,
-      interest_ids: selectedInterests,
     };
 
     if (profilePicture) {
@@ -308,14 +265,6 @@ export const Settings = () => {
     navigate('/');
   };
 
-  // Group interests by category
-  const groupedInterests = interestsList.reduce((acc, interest) => {
-    const category = interest.category || 'General';
-    if (!acc[category]) acc[category] = [];
-    acc[category].push(interest);
-    return acc;
-  }, {});
-
   if (loading) {
     return <Loader />;
   }
@@ -325,7 +274,7 @@ export const Settings = () => {
       <div>
         <h2 className="text-2xl font-extrabold font-display text-[#2C2C2A] dark:text-slate-100">Settings</h2>
         <p className="text-[#5F5E5A] dark:text-slate-400 text-xs mt-1">
-          Update your location, profile biography, and connection tags here.
+          Update your location and profile details here.
         </p>
       </div>
 
@@ -357,123 +306,17 @@ export const Settings = () => {
               </div>
             </div>
 
-            {/* Location & Looking For */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-[#5F5E5A] dark:text-slate-400">City</label>
-                <input
-                  type="text"
-                  className="glass-input p-3 rounded-xl text-sm"
-                  value={city}
-                  onChange={(e) => setCity(e.target.value)}
-                  disabled={saving}
-                  required
-                />
-              </div>
-
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-[#5F5E5A] dark:text-slate-400">State</label>
-                <input
-                  type="text"
-                  className="glass-input p-3 rounded-xl text-sm"
-                  value={state}
-                  onChange={(e) => setState(e.target.value)}
-                  disabled={saving}
-                  required
-                />
-              </div>
-
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-[#5F5E5A] dark:text-slate-400">Pincode</label>
-                <input
-                  type="text"
-                  className="glass-input p-3 rounded-xl text-sm"
-                  value={pincode}
-                  onChange={(e) => setPincode(e.target.value)}
-                  disabled={saving}
-                  required
-                />
-              </div>
-
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-[#5F5E5A] dark:text-slate-400">Looking For</label>
-                <select
-                  className="glass-input p-3 rounded-xl text-sm w-full bg-white dark:bg-brand-black/90 text-[#2C2C2A] dark:text-slate-200"
-                  value={lookingFor}
-                  onChange={(e) => setLookingFor(e.target.value)}
-                  disabled={saving}
-                  required
-                >
-                  <option value="friendship">Friendship</option>
-                  <option value="relationship">Relationship</option>
-                </select>
-              </div>
-            </div>
-
+            {/* City input */}
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-[#5F5E5A] dark:text-slate-400">Address</label>
+              <label className="text-xs font-semibold text-[#5F5E5A] dark:text-slate-400">City</label>
               <input
                 type="text"
-                className="glass-input p-3 rounded-xl text-sm"
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                disabled={saving}
-              />
-            </div>
-
-            {/* Bio */}
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-[#5F5E5A] dark:text-slate-400">Biography</label>
-              <textarea
-                className="glass-input p-3 rounded-xl text-sm min-h-24 resize-none"
-                value={bio}
-                onChange={(e) => setBio(e.target.value)}
+                className="glass-input p-3 rounded-xl text-sm w-full"
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
                 disabled={saving}
                 required
               />
-            </div>
-
-            {/* Interests checklist */}
-            <div className="flex flex-col gap-3 text-left border-t border-[#F4C0D1] dark:border-slate-900 pt-6">
-              <div className="flex justify-between items-end pb-1">
-                <label className="text-xs font-semibold text-[#5F5E5A] dark:text-slate-400 uppercase tracking-wider">
-                  Update Interests
-                </label>
-                <span className="text-[10px] font-bold text-[#D4537E] dark:text-brand-purple-light uppercase">
-                  {selectedInterests.length} selected (Requires 3-10)
-                </span>
-              </div>
-
-              <div className="space-y-5 max-h-[250px] overflow-y-auto pr-1">
-                {Object.keys(groupedInterests).map((category) => (
-                  <div key={category} className="space-y-1.5">
-                    <div className="text-[9px] font-extrabold text-[#5F5E5A] dark:text-slate-500 uppercase tracking-widest">
-                      {category}
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {groupedInterests[category].map((interest) => {
-                        const isSelected = selectedInterests.includes(interest.id);
-                        return (
-                          <button
-                            type="button"
-                            key={interest.id}
-                            onClick={() => handleInterestToggle(interest.id)}
-                            disabled={saving}
-                            className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-[11px] font-bold transition-all duration-200 cursor-pointer border ${
-                              isSelected
-                                ? 'bg-[#D4537E] text-white border-transparent shadow-xs dark:bg-brand-purple dark:border-brand-purple-light'
-                                : 'bg-[#FCEEF3] text-[#2C2C2A] dark:bg-brand-black/30 dark:text-slate-400 border-[#F4C0D1] dark:border-slate-800 hover:border-[#D4537E]'
-                            }`}
-                          >
-                            {isSelected && <Check className="w-3 h-3" />}
-                            <span>{interest.name}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
             </div>
 
             {/* Submit */}

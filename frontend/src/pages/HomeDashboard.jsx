@@ -8,9 +8,7 @@ import {
   CheckCircle2, 
   XCircle, 
   ArrowRight,
-  MapPin,
-  Heart,
-  Tag
+  MapPin
 } from 'lucide-react';
 import { API_BASE_URL } from '../api/client';
 
@@ -34,18 +32,6 @@ export const HomeDashboard = () => {
       value: userProfile?.city || 'Not Set',
       icon: MapPin,
       color: 'text-indigo-400'
-    },
-    {
-      label: 'Looking For',
-      value: userProfile?.looking_for === 'friendship' ? 'Friendship' : 'Relationship',
-      icon: Heart,
-      color: 'text-rose-400'
-    },
-    {
-      label: 'Interests Count',
-      value: `${userProfile?.interests?.length || 0} selected`,
-      icon: Tag,
-      color: 'text-purple-400'
     }
   ];
 
@@ -88,7 +74,7 @@ export const HomeDashboard = () => {
       </div>
 
       {/* Grid Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 gap-6">
         {stats.map((stat, i) => {
           const Icon = stat.icon;
           return (
@@ -110,7 +96,7 @@ export const HomeDashboard = () => {
         <div className="lg:col-span-2 glass-panel p-6 md:p-8 rounded-3xl border border-[#F4C0D1] dark:border-brand-purple/10 bg-white dark:bg-brand-dark/10 flex flex-col justify-between">
           <div>
             <h3 className="text-lg font-bold font-display text-[#2C2C2A] dark:text-slate-100 mb-2">Profile Setup Checklist</h3>
-            <p className="text-xs text-[#5F5E5A] dark:text-slate-400 mb-6">Complete your profile elements to fetch more matching recommendations.</p>
+            <p className="text-xs text-[#5F5E5A] dark:text-slate-400 mb-6">Complete your profile elements to fetch recommendations.</p>
             
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {Object.entries(completion.breakdown || {}).map(([field, completed]) => (
@@ -165,7 +151,7 @@ export const HomeDashboard = () => {
               <div className="text-xs text-[#5F5E5A] dark:text-slate-500 mt-1">
                 {completion.percentage === 100 
                   ? 'Excellent job! You are visible to all matching users nearby.'
-                  : 'Add a bio, profile picture, or select your interest list to reach 100%.'}
+                  : 'Add a profile picture and city to reach 100%.'}
               </div>
             </div>
 
@@ -211,7 +197,7 @@ export const HomeDashboard = () => {
           </div>
 
           <div className="mt-8 p-4 bg-[#FCEEF3]/50 dark:bg-brand-black/30 border border-[#F4C0D1] dark:border-slate-900 rounded-2xl text-[11px] text-[#5F5E5A] dark:text-slate-500 font-semibold leading-relaxed">
-            Note: Lynqo enforces strict invitation approval before opening messaging. Send connect requests to match interests and chat!
+            Note: Lynqo enforces strict invitation approval before opening messaging. Send connect requests to chat!
           </div>
         </div>
       </div>
