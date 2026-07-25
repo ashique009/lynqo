@@ -63,4 +63,18 @@ export const authService = {
       user_id: userId,
     });
   },
+
+  async deleteAccount(password) {
+    return client.post('/api/auth/account/delete/', {
+      password,
+    });
+  },
+
+  async contactUs(name, email, message) {
+    return client.post('/api/auth/contact-us/', {
+      name,
+      email,
+      message,
+    });
+  },
 };

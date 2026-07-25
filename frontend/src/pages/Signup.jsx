@@ -256,6 +256,15 @@ export const Signup = () => {
           </Link>
           .
         </div>
+        <div className="text-xs text-slate-400/80 mt-1">
+          Questions or help?{' '}
+          <Link
+            to="/contact-us"
+            className="text-brand-purple-light hover:underline font-semibold transition-colors"
+          >
+            Contact Us
+          </Link>
+        </div>
       </div>
     </div>
   );

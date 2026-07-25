@@ -221,16 +221,24 @@ export const Terms = () => {
 
             <div className="pl-4 md:pl-10">
               <div className="p-4 rounded-2xl bg-[#FCEEF3]/60 dark:bg-brand-black/40 border border-[#F4C0D1] dark:border-brand-purple/20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                <div>
-                  <p className="text-xs font-semibold text-[#5F5E5A] dark:text-slate-400">
-                    If you have any questions regarding these Terms and Conditions, please contact us at:
-                  </p>
-                  <a
-                    href="mailto:lynqoadmin111@gmail.com"
-                    className="text-sm font-bold text-[#D4537E] hover:underline dark:text-brand-purple-light transition-colors mt-1 inline-block"
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 w-full">
+                  <div>
+                    <p className="text-xs font-semibold text-[#5F5E5A] dark:text-slate-400">
+                      If you have any questions regarding these Terms and Conditions, please contact us at:
+                    </p>
+                    <a
+                      href="mailto:lynqoadmin111@gmail.com"
+                      className="text-sm font-bold text-[#D4537E] hover:underline dark:text-brand-purple-light transition-colors mt-1 inline-block"
+                    >
+                      lynqoadmin111@gmail.com
+                    </a>
+                  </div>
+                  <Link
+                    to="/contact-us"
+                    className="text-xs font-bold bg-[#D4537E] hover:bg-[#c2436d] dark:bg-brand-purple dark:hover:bg-brand-purple-dark text-white px-4 py-2.5 rounded-xl transition-all shadow-sm flex items-center justify-center gap-1.5 flex-shrink-0"
                   >
-                    lynqoadmin111@gmail.com
-                  </a>
+                    Contact Support Form
+                  </Link>
                 </div>
               </div>
             </div>

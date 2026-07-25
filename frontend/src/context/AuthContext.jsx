@@ -127,6 +127,32 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const deleteAccount = async (password) => {
+    setIsLoading(true);
+    try {
+      const response = await authService.deleteAccount(password);
+      if (response.success) {
+        localStorage.removeItem('lynqo_token');
+        localStorage.removeItem('lynqo_username');
+        setToken(null);
+        setUsername(null);
+        setUserProfile(null);
+        setHasProfile(false);
+        setIsLoading(false);
+        return { success: true, message: response.message || 'Account deleted successfully.' };
+      } else {
+        setIsLoading(false);
+        return { success: false, message: response.message || 'Failed to delete account.' };
+      }
+    } catch (err) {
+      setIsLoading(false);
+      return {
+        success: false,
+        message: err.message || 'Failed to delete account.',
+      };
+    }
+  };
+
   const value = {
     token,
     username,
@@ -136,6 +162,7 @@ export const AuthProvider = ({ children }) => {
     login,
     signup,
     logout,
+    deleteAccount,
     saveSession,
     refreshProfile
   };

@@ -35,6 +35,7 @@ import Settings from "./pages/Settings";
 import Feedback from "./pages/Feedback";
 import PrivacyPolicy from "./pages/PrivacyPolicy";
 import Terms from "./pages/Terms";
+import ContactUs from "./pages/ContactUs";
 import NotFound from "./pages/NotFound";
 import AdminLogin from "./pages/AdminLogin";
 import AdminDashboard from "./pages/AdminDashboard";
@@ -73,9 +74,10 @@ function App() {
                 }
               />
 
-              {/* Public Legal Pages */}
+              {/* Public Legal & Info Pages */}
               <Route path="/privacy-policy" element={<PrivacyPolicy />} />
               <Route path="/terms" element={<Terms />} />
+              <Route path="/contact-us" element={<ContactUs />} />
 
               {/* Protected Routes (Require active authentication session) */}
 
