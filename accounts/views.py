@@ -424,9 +424,7 @@ class AdminUserListView(APIView):
         elif status_filter == 'banned':
             users = users.filter(is_banned=True)
 
-        gender_filter = request.query_params.get('gender')
-        if gender_filter:
-            users = users.filter(profile__gender=gender_filter)
+        
 
         serializer = AdminUserListSerializer(users, many=True)
         return success_response(message="Users fetched successfully", data=serializer.data, status_code=status.HTTP_200_OK)

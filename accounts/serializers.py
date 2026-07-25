@@ -54,36 +54,24 @@ class InterestSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'category']
 
 #profile serializer
+
 class ProfileSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(source='user.id', read_only=True)
     username = serializers.CharField(source='user.username', read_only=True)
     full_name = serializers.CharField(source='user.full_name', read_only=True)
     email = serializers.EmailField(source='user.email', read_only=True)
     phone = serializers.CharField(source='user.phone', read_only=True)
-    interests = InterestSerializer(many=True, read_only=True)
-    interest_ids = serializers.PrimaryKeyRelatedField(
-        queryset=Interest.objects.all(), many=True, write_only=True, source='interests', required=False
-    )
     profile_completion = serializers.ReadOnlyField()
 
     class Meta:
         model = Profile
         fields = [
             'id', 'username', 'full_name', 'email', 'phone',
-            'profile_picture', 'bio', 'address', 'city', 'state',
-            'pincode', 'date_of_birth', 'gender', 'looking_for',
-            'interests', 'interest_ids', 'profile_completion',
+            'profile_picture', 'city',
+            'profile_completion',
             'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']
-
-    def validate_interest_ids(self, value):
-        if value and len(value) > 0:
-            if len(value) < 3:
-                raise serializers.ValidationError("Please select at least 3 interests.")
-            if len(value) > 10:
-                raise serializers.ValidationError("You can select a maximum of 10 interests.")
-        return value
 
         
 #connect request serializer
@@ -170,13 +158,12 @@ class ConversationSerializer(serializers.ModelSerializer):
 class AdminUserListSerializer(serializers.ModelSerializer):
     profile_picture = serializers.SerializerMethodField()
     city = serializers.SerializerMethodField()
-    gender = serializers.SerializerMethodField()
 
     class Meta:
         model = User
         fields = [
             'id', 'username', 'full_name', 'email', 'phone',
-            'profile_picture', 'gender', 'city',
+            'profile_picture', 'city',
             'is_banned', 'is_staff', 'date_joined'
         ]
 
@@ -188,9 +175,4 @@ class AdminUserListSerializer(serializers.ModelSerializer):
     def get_city(self, obj):
         if hasattr(obj, 'profile'):
             return obj.profile.city
-        return None
-
-    def get_gender(self, obj):
-        if hasattr(obj, 'profile'):
-            return obj.profile.gender
         return None
