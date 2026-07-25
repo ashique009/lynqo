@@ -106,7 +106,7 @@ export const ResetPassword = () => {
             />
             <button
               type="button"
-              className="absolute right-3 top-3.5 text-slate-500 hover:text-slate-300 cursor-pointer"
+              className="absolute right-3.5 top-3.5 text-slate-500 hover:text-slate-300 cursor-pointer"
               onClick={() => setShowNewPassword(!showNewPassword)}
             >
               {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -131,7 +131,7 @@ export const ResetPassword = () => {
             />
             <button
               type="button"
-              className="absolute right-3 top-3.5 text-slate-500 hover:text-slate-300 cursor-pointer"
+              className="absolute right-3.5 top-3.5 text-slate-500 hover:text-slate-300 cursor-pointer"
               onClick={() => setShowConfirmPassword(!showConfirmPassword)}
             >
               {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}

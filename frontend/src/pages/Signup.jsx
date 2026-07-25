@@ -11,6 +11,8 @@ export const Signup = () => {
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [fieldErrors, setFieldErrors] = useState({});
 
@@ -173,14 +175,21 @@ export const Signup = () => {
           <div className="relative">
             <Lock className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-500" />
             <input
-              type="password"
-              className="w-full glass-input pl-10 pr-4 py-3 rounded-xl text-sm"
+              type={showPassword ? 'text' : 'password'}
+              className="w-full glass-input pl-10 pr-10 py-3 rounded-xl text-sm"
               placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               disabled={loading}
               required
             />
+            <button
+              type="button"
+              className="absolute right-3.5 top-3.5 text-slate-500 hover:text-slate-300 cursor-pointer"
+              onClick={() => setShowPassword(!showPassword)}
+            >
+              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
           </div>
           {getFieldError('password') && (
             <p className="text-[10px] text-rose-400 font-semibold mt-1">
@@ -197,14 +206,21 @@ export const Signup = () => {
           <div className="relative">
             <Lock className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-500" />
             <input
-              type="password"
-              className="w-full glass-input pl-10 pr-4 py-3 rounded-xl text-sm"
+              type={showConfirmPassword ? 'text' : 'password'}
+              className="w-full glass-input pl-10 pr-10 py-3 rounded-xl text-sm"
               placeholder="••••••••"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               disabled={loading}
               required
             />
+            <button
+              type="button"
+              className="absolute right-3.5 top-3.5 text-slate-500 hover:text-slate-300 cursor-pointer"
+              onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+            >
+              {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
           </div>
           {getFieldError('confirm_password') && (
             <p className="text-[10px] text-rose-400 font-semibold mt-1">

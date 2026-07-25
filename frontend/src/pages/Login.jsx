@@ -2,11 +2,12 @@ import React, { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { LogIn, Key, User } from 'lucide-react';
+import { LogIn, Key, User, Eye, EyeOff } from 'lucide-react';
 
 export const Login = () => {
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const { login } = useAuth();
@@ -72,14 +73,21 @@ export const Login = () => {
           <div className="relative">
             <Key className="absolute left-3.5 top-3.5 w-4 h-4 text-slate-500" />
             <input
-              type="password"
-              className="w-full glass-input pl-10 pr-4 py-3 rounded-xl text-sm"
+              type={showPassword ? 'text' : 'password'}
+              className="w-full glass-input pl-10 pr-10 py-3 rounded-xl text-sm"
               placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               disabled={loading}
               required
             />
+            <button
+              type="button"
+              className="absolute right-3.5 top-3.5 text-slate-500 hover:text-slate-300 cursor-pointer"
+              onClick={() => setShowPassword(!showPassword)}
+            >
+              {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
           </div>
           <div className="text-right mt-1">
             <Link
