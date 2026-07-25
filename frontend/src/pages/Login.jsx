@@ -31,7 +31,12 @@ export const Login = () => {
       showToast('Welcome back to Lynqo!', 'success');
       navigate(from, { replace: true });
     } else {
-      showToast(result.message || 'Invalid username/email or password.', 'error');
+      if (result.data && result.data.email_verification_required && result.data.user_id) {
+        showToast(result.message || 'Please verify your email before logging in.', 'info');
+        navigate(`/verify-email?user_id=${result.data.user_id}`);
+      } else {
+        showToast(result.message || 'Invalid username/email or password.', 'error');
+      }
     }
   };
 

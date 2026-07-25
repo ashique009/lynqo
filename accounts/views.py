@@ -34,7 +34,7 @@ class SignupView(APIView):
 
         return success_response(
             message="Signup successful. Please check your email for the verification code.",
-            data={"token": token.key, "username": user.username},
+            data={"user_id": user.id, "token": token.key, "username": user.username},
             status_code=status.HTTP_201_CREATED
         )
 

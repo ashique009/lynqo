@@ -40,8 +40,13 @@ export const Signup = () => {
     setLoading(false);
 
     if (result.success) {
-      showToast('Account created successfully!', 'success');
-      navigate('/profile-setup');
+      showToast(result.message || 'Account created! Check your email for OTP.', 'success');
+      const userId = result.data?.user_id;
+      if (userId) {
+        navigate(`/verify-email?user_id=${userId}`);
+      } else {
+        navigate('/verify-email');
+      }
     } else {
       showToast(result.message || 'Registration failed.', 'error');
       if (result.errors) {

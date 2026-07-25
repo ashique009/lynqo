@@ -50,4 +50,17 @@ export const authService = {
   async getOnlineStatus(userId) {
     return client.get(`/api/auth/online-status/${userId}/`);
   },
+
+  async verifyEmail(userId, otpCode) {
+    return client.post('/api/auth/verify-email/', {
+      user_id: userId,
+      otp_code: otpCode,
+    });
+  },
+
+  async resendOtp(userId) {
+    return client.post('/api/auth/resend-otp/', {
+      user_id: userId,
+    });
+  },
 };

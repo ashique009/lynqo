@@ -59,6 +59,7 @@ client.interceptors.response.use(
       message: errorMessage,
       errors: errors,
       status: error.response ? error.response.status : null,
+      data: error.response && error.response.data ? error.response.data.data : null,
       originalError: error
     };
 

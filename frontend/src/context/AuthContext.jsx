@@ -64,10 +64,15 @@ export const AuthProvider = ({ children }) => {
         await fetchProfile(authToken);
         return { success: true };
       }
-      return { success: false, message: response.message || 'Login failed' };
+      return { success: false, message: response.message || 'Login failed', data: response.data };
     } catch (err) {
       setIsLoading(false);
-      return { success: false, message: err.message || 'Invalid credentials' };
+      return { 
+        success: false, 
+        message: err.message || 'Invalid credentials',
+        status: err.status,
+        data: err.data
+      };
     }
   };
 
@@ -75,16 +80,9 @@ export const AuthProvider = ({ children }) => {
     setIsLoading(true);
     try {
       const response = await authService.signup(fullName, usernameInput, email, phone, password, confirmPassword);
-      if (response.success && response.data) {
-        const { token: authToken, username: userObj } = response.data;
-        localStorage.setItem('lynqo_token', authToken);
-        localStorage.setItem('lynqo_username', userObj);
-        setToken(authToken);
-        setUsername(userObj);
-        setHasProfile(false);
-        setUserProfile(null);
-        setIsLoading(false);
-        return { success: true };
+      setIsLoading(false);
+      if (response.success) {
+        return { success: true, data: response.data, message: response.message };
       }
       return { success: false, message: response.message || 'Signup failed' };
     } catch (err) {
@@ -95,6 +93,15 @@ export const AuthProvider = ({ children }) => {
         errors: err.errors 
       };
     }
+  };
+
+  const saveSession = async (authToken, userObj) => {
+    setIsLoading(true);
+    localStorage.setItem('lynqo_token', authToken);
+    localStorage.setItem('lynqo_username', userObj);
+    setToken(authToken);
+    setUsername(userObj);
+    await fetchProfile(authToken);
   };
 
   const logout = async () => {
@@ -129,6 +136,7 @@ export const AuthProvider = ({ children }) => {
     login,
     signup,
     logout,
+    saveSession,
     refreshProfile
   };
 
