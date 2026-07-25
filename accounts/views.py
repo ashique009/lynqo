@@ -779,7 +779,7 @@ class ContactUsView(APIView):
         try:
             resend.api_key = django_settings.RESEND_API_KEY
             resend.Emails.send({
-                "from": "onboarding@resend.dev",
+                "from": "Lynqo <onboarding@lynqoweb.website>",
                 "to": "lynqoadmin111@gmail.com",
                 "subject": f"Lynqo Contact Form: {name}",
                 "html": f"<p><strong>From:</strong> {name} ({email})</p><p><strong>Message:</strong></p><p>{message}</p>"

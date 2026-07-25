@@ -79,7 +79,7 @@ def send_otp_email(user, otp_code):
     resend.api_key = django_settings.RESEND_API_KEY
     try:
         resend.Emails.send({
-            "from": "onboarding@resend.dev",
+            "from": "Lynqo <onboarding@lynqoweb.website>",
             "to": user.email,
             "subject": "Verify your Lynqo account",
             "html": f"<p>Hi {user.full_name or user.username},</p><p>Your verification code is:</p><h2>{otp_code}</h2><p>This code expires in 10 minutes.</p>"
