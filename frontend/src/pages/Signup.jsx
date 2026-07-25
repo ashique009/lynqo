@@ -229,14 +229,33 @@ export const Signup = () => {
         </button>
       </form>
 
-      <div className="mt-6 text-center text-sm text-slate-400 font-medium">
-        Already have an account?{' '}
-        <Link
-          to="/login"
-          className="text-brand-purple-light hover:underline font-bold transition-all"
-        >
-          Log In
-        </Link>
+      <div className="mt-6 text-center text-sm text-slate-400 font-medium flex flex-col gap-2">
+        <div>
+          Already have an account?{' '}
+          <Link
+            to="/login"
+            className="text-brand-purple-light hover:underline font-bold transition-all"
+          >
+            Log In
+          </Link>
+        </div>
+        <div className="text-xs text-slate-400/80 leading-relaxed">
+          By signing up, you agree to our{' '}
+          <Link
+            to="/terms"
+            className="text-brand-purple-light hover:underline font-semibold transition-colors"
+          >
+            Terms & Conditions
+          </Link>{' '}
+          and{' '}
+          <Link
+            to="/privacy-policy"
+            className="text-brand-purple-light hover:underline font-semibold transition-colors"
+          >
+            Privacy Policy
+          </Link>
+          .
+        </div>
       </div>
     </div>
   );

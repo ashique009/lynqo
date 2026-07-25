@@ -33,6 +33,8 @@ import ConversationList from "./pages/ConversationList";
 import Chat from "./pages/Chat";
 import Settings from "./pages/Settings";
 import Feedback from "./pages/Feedback";
+import PrivacyPolicy from "./pages/PrivacyPolicy";
+import Terms from "./pages/Terms";
 import NotFound from "./pages/NotFound";
 import AdminLogin from "./pages/AdminLogin";
 import AdminDashboard from "./pages/AdminDashboard";
@@ -70,6 +72,10 @@ function App() {
                   </PublicRoute>
                 }
               />
+
+              {/* Public Legal Pages */}
+              <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+              <Route path="/terms" element={<Terms />} />
 
               {/* Protected Routes (Require active authentication session) */}
 

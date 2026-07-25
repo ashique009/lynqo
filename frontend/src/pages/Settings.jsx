@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { useTheme } from '../context/ThemeContext';
 import { profileService } from '../services/profileService';
 import { authService } from '../services/authService';
 import Loader from '../components/Loader';
-import { Upload, Save, LogOut, Bell, BellOff, Download, Sun, Moon } from 'lucide-react';
+import { Upload, Save, LogOut, Bell, BellOff, Download, Sun, Moon, ShieldCheck, FileText } from 'lucide-react';
 import { API_BASE_URL } from '../api/client';
 
 const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || 'BD57u82r0XebhNJL2PE0cGdLCsGv3zD8iNkTXp2blUwT6rrfm46ws_w5cxbMqMLJsGTfx6Tewq6qtQeOI9eYKc8';
@@ -482,6 +482,24 @@ export const Settings = () => {
               <LogOut className="w-4 h-4" />
               <span>Log Out Session</span>
             </button>
+
+            <div className="pt-3 border-t border-[#F4C0D1]/50 dark:border-slate-800/80 flex items-center justify-center gap-4 flex-wrap text-xs">
+              <Link
+                to="/terms"
+                className="inline-flex items-center gap-1.5 text-[#5F5E5A] hover:text-[#D4537E] dark:text-slate-400 dark:hover:text-brand-purple-light font-medium transition-colors"
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span className="hover:underline">Terms & Conditions</span>
+              </Link>
+              <span className="text-[#F4C0D1] dark:text-slate-800">•</span>
+              <Link
+                to="/privacy-policy"
+                className="inline-flex items-center gap-1.5 text-[#5F5E5A] hover:text-[#D4537E] dark:text-slate-400 dark:hover:text-brand-purple-light font-medium transition-colors"
+              >
+                <ShieldCheck className="w-3.5 h-3.5" />
+                <span className="hover:underline">Privacy Policy</span>
+              </Link>
+            </div>
           </div>
         </div>
       </div>
