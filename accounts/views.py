@@ -512,18 +512,22 @@ class ForgotPasswordView(APIView):
         user = User.objects.filter(email=email).first()
 
         if user:
-            # Old unused tokens ivide invalidate cheyyam (optional but good practice)
             PasswordResetToken.objects.filter(user=user, is_used=False).update(is_used=True)
-
             reset_token = PasswordResetToken.objects.create(user=user)
 
-            # TEMPORARY: Email illathe test cheyyan, link console il print cheyyum
-            reset_link = f"https://lynqo.vercel.app/reset-password?token={reset_token.token}"
-            print(f"[DEV] Password reset link for {user.email}: {reset_link}")
+            reset_link = f"https://lynqoweb.website/reset-password?token={reset_token.token}"
 
-            # Later: send_reset_email(user, reset_token.token) — Resend set up cheythaal ivide call cheyyum
+            try:
+                resend.api_key = django_settings.RESEND_API_KEY
+                resend.Emails.send({
+                    "from": "Lynqo <onboarding@lynqoweb.website>",
+                    "to": user.email,
+                    "subject": "Reset your Lynqo password",
+                    "html": f"<p>Hi {user.full_name or user.username},</p><p>Click the link below to reset your password:</p><p><a href='{reset_link}'>{reset_link}</a></p><p>This link expires in 30 minutes.</p>"
+                })
+            except Exception as e:
+                print(f"Failed to send reset email: {e}")
 
-        # Email exist cheyyunno illayo ennu leak cheyyaruth, so same message ellarkkum
         return success_response(
             message="If this email is registered, a password reset link has been sent.",
             data=None,
