@@ -158,6 +158,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "https://chikkundo.vercel.app",
     "https://lynqoweb.vercel.app",
+    "https://lynqoweb.website",
+    "https://www.lynqoweb.website",
 ]
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
