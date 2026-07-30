@@ -4,6 +4,7 @@ from django.conf import settings
 import uuid
 from django.utils import timezone
 from datetime import timedelta
+from cloudinary_storage.storage import RawMediaCloudinaryStorage
 
 class User(AbstractUser):
     full_name = models.CharField(max_length=255)
@@ -32,7 +33,7 @@ class Interest(models.Model):
 
 class Profile(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='profile')
-    profile_picture = models.ImageField(upload_to='profile_pics/', blank=True, null=True)
+    profile_picture = models.ImageField(upload_to='profile_pics/', storage=RawMediaCloudinaryStorage(), blank=True, null=True)
     city = models.CharField(max_length=100, blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -104,7 +105,7 @@ class Message(models.Model):
     sender = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='sent_messages')
     content = models.TextField(blank=True, null=True)
     message_type = models.CharField(max_length=10, choices=(('text', 'Text'), ('voice', 'Voice')), default='text')
-    audio_file = models.FileField(upload_to='voice_messages/', blank=True, null=True)
+    audio_file = models.FileField(upload_to='voice_messages/', storage=RawMediaCloudinaryStorage(), blank=True, null=True)
     duration_seconds = models.PositiveIntegerField(blank=True, null=True)
     is_read = models.BooleanField(default=False)
     is_edited = models.BooleanField(default=False)
