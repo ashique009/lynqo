@@ -102,7 +102,10 @@ class Conversation(models.Model):
 class Message(models.Model):
     conversation = models.ForeignKey(Conversation, on_delete=models.CASCADE, related_name='messages')
     sender = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='sent_messages')
-    content = models.TextField()
+    content = models.TextField(blank=True, null=True)
+    message_type = models.CharField(max_length=10, choices=(('text', 'Text'), ('voice', 'Voice')), default='text')
+    audio_file = models.FileField(upload_to='voice_messages/', blank=True, null=True)
+    duration_seconds = models.PositiveIntegerField(blank=True, null=True)
     is_read = models.BooleanField(default=False)
     is_edited = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
@@ -114,7 +117,7 @@ class Message(models.Model):
         ordering = ['created_at']
 
     def __str__(self):
-        return f"{self.sender.username}: {self.content[:30]}"
+        return f"{self.sender.username}: {self.content[:30] if self.content else '[voice message]'}"
     
 class PasswordResetToken(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='reset_tokens')

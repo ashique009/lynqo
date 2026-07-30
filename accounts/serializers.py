@@ -118,7 +118,7 @@ class MessageSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Message
-        fields = ['id', 'conversation', 'sender', 'sender_username', 'content', 'is_read', 'is_edited', 'is_deleted', 'created_at']
+        fields = ['id', 'conversation', 'sender', 'sender_username', 'content', 'message_type', 'audio_file', 'duration_seconds', 'is_read', 'is_edited', 'is_deleted', 'created_at']
         read_only_fields = ['sender', 'is_read', 'is_edited', 'is_deleted', 'created_at']
 
     def validate_content(self, value):

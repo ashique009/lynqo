@@ -273,12 +273,16 @@ class ConversationDetailView(APIView):
         return success_response(message="Conversation fetched successfully", data=serializer.data, status_code=status.HTTP_200_OK)
 
 #send message view
+#send message view
 class SendMessageView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
         conversation_id = request.data.get('conversation_id')
         content = request.data.get('content')
+        message_type = request.data.get('message_type', 'text')
+        audio_file = request.FILES.get('audio_file')
+        duration_seconds = request.data.get('duration_seconds')
 
         # Rule: Conversation exist cheyyunnundo
         try:
@@ -290,21 +294,34 @@ class SendMessageView(APIView):
         if request.user != conversation.participant_1 and request.user != conversation.participant_2:
             return success_response(message="You are not part of this conversation.", data=None, status_code=status.HTTP_403_FORBIDDEN)
 
-        # Rule: Empty message reject cheyyuka
-        if not content or not content.strip():
-            return success_response(message="Message cannot be empty.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
+        if message_type == 'voice':
+            if not audio_file:
+                return success_response(message="Audio file is required for voice messages.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
 
-        message = Message.objects.create(conversation=conversation, sender=request.user, content=content.strip())
+            message = Message.objects.create(
+                conversation=conversation,
+                sender=request.user,
+                message_type='voice',
+                audio_file=audio_file,
+                duration_seconds=duration_seconds or None
+            )
+        else:
+            # Rule: Empty text message reject cheyyuka
+            if not content or not content.strip():
+                return success_response(message="Message cannot be empty.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
+
+            message = Message.objects.create(conversation=conversation, sender=request.user, content=content.strip(), message_type='text')
 
         # Conversation-inte updated_at refresh cheyyuka (latest activity kaanikkaan)
         conversation.save()
 
         # Push notification ayakkuka receiver-nu
         receiver = conversation.participant_1 if conversation.participant_2 == request.user else conversation.participant_2
+        notif_body = "🎤 Voice message" if message_type == 'voice' else content.strip()[:100]
         send_push_notification(
             user=receiver,
             title=f"New message from {request.user.full_name or request.user.username}",
-            body=content.strip()[:100],
+            body=notif_body,
             url=f"/chat/{conversation.id}"
         )
 
