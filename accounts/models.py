@@ -4,7 +4,7 @@ from django.conf import settings
 import uuid
 from django.utils import timezone
 from datetime import timedelta
-from cloudinary_storage.storage import RawMediaCloudinaryStorage
+from cloudinary_storage.storage import MediaCloudinaryStorage, RawMediaCloudinaryStorage
 
 class User(AbstractUser):
     full_name = models.CharField(max_length=255)
@@ -33,7 +33,7 @@ class Interest(models.Model):
 
 class Profile(models.Model):
     user = models.OneToOneField(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='profile')
-    profile_picture = models.ImageField(upload_to='profile_pics/', storage=RawMediaCloudinaryStorage(), blank=True, null=True)
+    profile_picture = models.ImageField(upload_to='profile_pics/', storage=MediaCloudinaryStorage(), blank=True, null=True)
     city = models.CharField(max_length=100, blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
