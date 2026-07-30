@@ -212,16 +212,27 @@ export const Chat = () => {
     
     // Prevent default actions to stop text selection/scrolling
     e.preventDefault();
+
+    const targetElement = e.currentTarget;
+    const pointerId = e.pointerId;
+    const clientX = e.clientX;
+    const clientY = e.clientY;
     
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       
       // Capture pointer events on the target element
-      e.currentTarget.setPointerCapture(e.pointerId);
-      pointerIdRef.current = e.pointerId;
+      if (targetElement) {
+        try {
+          targetElement.setPointerCapture(pointerId);
+        } catch (captureErr) {
+          console.error('Failed to set pointer capture:', captureErr);
+        }
+      }
+      pointerIdRef.current = pointerId;
       
       // Initialize drag start coordinates
-      dragStartRef.current = { x: e.clientX, y: e.clientY };
+      dragStartRef.current = { x: clientX, y: clientY };
       setDragDeltaX(0);
       setDragDeltaY(0);
       isDragCancelledRef.current = false;
