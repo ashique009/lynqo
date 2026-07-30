@@ -20,6 +20,19 @@ export const chatService = {
     });
   },
 
+  async sendVoiceMessage(conversationId, audioFile, durationSeconds) {
+    const formData = new FormData();
+    formData.append('conversation_id', conversationId);
+    formData.append('message_type', 'voice');
+    formData.append('audio_file', audioFile);
+    formData.append('duration_seconds', Math.round(durationSeconds));
+    return client.post('/api/auth/messages/send/', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+  },
+
   async sendTypingSignal(conversationId) {
     return client.post('/api/auth/messages/typing/', {
       conversation_id: conversationId,
