@@ -74,7 +74,7 @@ export const Settings = () => {
   }, []);
 
   useEffect(() => {
-    // Check if the app is already installed or running in standalone mode
+    
     const checkStandalone = () => {
       const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
       setIsAlreadyInstalled(isStandalone);
