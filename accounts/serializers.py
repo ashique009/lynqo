@@ -1,178 +1,136 @@
 from rest_framework import serializers
-from django.contrib.auth import get_user_model
-from django.contrib.auth.password_validation import validate_password
-from .models import Profile, Interest, ConnectRequest, Conversation, Message
-from django.db import models
-User = get_user_model()
+from django.utils import timezone
+from datetime import timedelta
+from .models import Profile, ConnectRequest, Conversation, Message, User
+from .validators import validate_and_sanitize_image
 
-#signup serializer
-class SignupSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(write_only=True, validators=[validate_password])
-    confirm_password = serializers.CharField(write_only=True)
+
+class ProfilePublicSerializer(serializers.ModelSerializer):
+    profile_id = serializers.CharField(read_only=True)
+    display_name = serializers.CharField(read_only=True)
+    profile_picture = serializers.SerializerMethodField()
+    is_online = serializers.SerializerMethodField()
+    last_seen = serializers.SerializerMethodField()
 
     class Meta:
-        model = User
-        fields = ['full_name', 'username', 'email', 'phone', 'password', 'confirm_password']
+        model = Profile
+        fields = ['profile_id', 'display_name', 'profile_picture', 'is_online', 'last_seen']
 
-    def validate_username(self, value):
-        if User.objects.filter(username=value).exists():
-            raise serializers.ValidationError("Username already taken.")
-        return value
+    def get_profile_picture(self, obj):
+        if obj.profile_picture:
+            return obj.profile_picture.url
+        return None
 
-    def validate_email(self, value):
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("Email already registered.")
-        return value
+    def get_is_online(self, obj):
+        if obj.user.last_seen:
+            return timezone.now() - obj.user.last_seen < timedelta(minutes=2)
+        return False
 
-    def validate_phone(self, value):
-        if User.objects.filter(phone=value).exists():
-            raise serializers.ValidationError("Phone number already registered.")
-        return value
+    def get_last_seen(self, obj):
+        return obj.user.last_seen.isoformat() if obj.user.last_seen else None
 
-    def validate(self, data):
-        if data['password'] != data['confirm_password']:
-            raise serializers.ValidationError({"confirm_password": "Passwords do not match."})
-        return data
 
-    def create(self, validated_data):
-        validated_data.pop('confirm_password')
-        password = validated_data.pop('password')
-        user = User(**validated_data)
-        user.set_password(password)
-        user.save()
-        return user
-
-#login serializer
-class LoginSerializer(serializers.Serializer):
-    identifier = serializers.CharField()   # email or username
-    password = serializers.CharField(write_only=True)
-
-#interest serializer
-class InterestSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Interest
-        fields = ['id', 'name', 'category']
-
-#profile serializer
-
-class ProfileSerializer(serializers.ModelSerializer):
-    id = serializers.IntegerField(source='user.id', read_only=True)
-    username = serializers.CharField(source='user.username', read_only=True)
-    full_name = serializers.CharField(source='user.full_name', read_only=True)
-    email = serializers.EmailField(source='user.email', read_only=True)
-    phone = serializers.CharField(source='user.phone', read_only=True)
-    profile_completion = serializers.ReadOnlyField()
+class ProfileDetailSerializer(serializers.ModelSerializer):
+    profile_id = serializers.CharField(read_only=True)
+    display_name = serializers.CharField()
+    profile_picture = serializers.SerializerMethodField()
+    created_at = serializers.DateTimeField(read_only=True)
+    updated_at = serializers.DateTimeField(read_only=True)
 
     class Meta:
         model = Profile
         fields = [
-            'id', 'username', 'full_name', 'email', 'phone',
-            'profile_picture', 'city',
-            'profile_completion',
+            'profile_id', 'display_name', 'profile_picture',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['created_at', 'updated_at']
 
-        
-#connect request serializer
+    def get_profile_picture(self, obj):
+        if obj.profile_picture:
+            return obj.profile_picture.url
+        return None
+
+
+class ProfileCreateSerializer(serializers.Serializer):
+    display_name = serializers.CharField(min_length=2, max_length=60, trim_whitespace=True)
+    profile_picture = serializers.ImageField(required=False, allow_null=True)
+
+    def validate_profile_picture(self, value):
+        if value:
+            return validate_and_sanitize_image(value)
+        return value
+
+
+class ProfileUpdateSerializer(serializers.Serializer):
+    display_name = serializers.CharField(min_length=2, max_length=60, trim_whitespace=True, required=False)
+    profile_picture = serializers.ImageField(required=False, allow_null=True)
+
+    def validate_profile_picture(self, value):
+        if value:
+            return validate_and_sanitize_image(value)
+        return value
+
+
 class ConnectRequestSerializer(serializers.ModelSerializer):
-    sender_username = serializers.CharField(source='sender.username', read_only=True)
-    receiver_username = serializers.CharField(source='receiver.username', read_only=True)
-    reason_display = serializers.CharField(source='get_reason_display', read_only=True)
+    sender = serializers.SerializerMethodField()
+    receiver = serializers.SerializerMethodField()
+    status = serializers.CharField(read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
 
     class Meta:
         model = ConnectRequest
-        fields = [
-            'id', 'sender', 'sender_username',
-            'receiver', 'receiver_username',
-            'reason', 'reason_display', 'status',
-            'created_at', 'updated_at'
-        ]
-        read_only_fields = ['sender', 'status', 'created_at', 'updated_at']
+        fields = ['id', 'sender', 'receiver', 'reason', 'status', 'created_at']
 
-    def validate(self, data):
-        request = self.context['request']
-        sender = request.user
-        receiver = data.get('receiver')
+    def get_sender(self, obj):
+        return ProfilePublicSerializer(getattr(obj.sender, 'profile', None)).data
 
-        # Rule 1: Self-request avoid cheyyuka
-        if sender == receiver:
-            raise serializers.ValidationError("You cannot send a connect request to yourself.")
+    def get_receiver(self, obj):
+        return ProfilePublicSerializer(getattr(obj.receiver, 'profile', None)).data
 
-        # Rule 2: Duplicate pending request avoid cheyyuka
-        if ConnectRequest.objects.filter(sender=sender, receiver=receiver, status='pending').exists():
-            raise serializers.ValidationError("You already have a pending request with this user.")
 
-        # Rule 3: Already connected (accepted) request undenkil, puthu request avoid cheyyuka
-        already_connected = ConnectRequest.objects.filter(
-            (models.Q(sender=sender, receiver=receiver) | models.Q(sender=receiver, receiver=sender)),
-            status='accepted'
-        ).exists()
-        if already_connected:
-            raise serializers.ValidationError("You are already connected with this user.")
-
-        return data
-#message serializer   
 class MessageSerializer(serializers.ModelSerializer):
-    sender_username = serializers.CharField(source='sender.username', read_only=True)
+    conversation_id = serializers.IntegerField(source='conversation.id', read_only=True)
+    sender_profile_id = serializers.SerializerMethodField()
+    sender_display_name = serializers.SerializerMethodField()
+    client_message_id = serializers.CharField(required=False, allow_null=True)
 
     class Meta:
         model = Message
-        fields = ['id', 'conversation', 'sender', 'sender_username', 'content', 'message_type', 'audio_file', 'duration_seconds', 'is_read', 'is_edited', 'is_deleted', 'created_at']
-        read_only_fields = ['sender', 'is_read', 'is_edited', 'is_deleted', 'created_at']
+        fields = [
+            'id', 'client_message_id', 'conversation_id',
+            'sender_profile_id', 'sender_display_name',
+            'content', 'status', 'is_read', 'created_at'
+        ]
+        read_only_fields = ['id', 'status', 'is_read', 'created_at']
 
-    def validate_content(self, value):
-        if not value or not value.strip():
-            raise serializers.ValidationError("Message cannot be empty.")
-        return value
-#conversation serializer
+    def get_sender_profile_id(self, obj):
+        profile = getattr(obj.sender, 'profile', None)
+        return profile.profile_id if profile else obj.sender.username
+
+    def get_sender_display_name(self, obj):
+        profile = getattr(obj.sender, 'profile', None)
+        return profile.display_name if profile else obj.sender.username
+
+
 class ConversationSerializer(serializers.ModelSerializer):
     other_participant = serializers.SerializerMethodField()
     last_message = serializers.SerializerMethodField()
+    unread_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Conversation
-        fields = ['id', 'other_participant', 'last_message', 'created_at', 'updated_at']
+        fields = ['id', 'other_participant', 'last_message', 'unread_count', 'updated_at']
 
     def get_other_participant(self, obj):
-        request = self.context.get('request')
-        current_user = request.user
-        other_user = obj.participant_2 if obj.participant_1 == current_user else obj.participant_1
-        return {
-            'id': other_user.id,
-            'username': other_user.username,
-            'full_name': other_user.full_name
-        }
+        user = self.context.get('request').user
+        other = obj.get_other_participant(user)
+        return ProfilePublicSerializer(getattr(other, 'profile', None)).data
 
     def get_last_message(self, obj):
         last_msg = obj.messages.order_by('-created_at').first()
         if last_msg:
-            return {
-                'content': last_msg.content,
-                'sender': last_msg.sender.username,
-                'created_at': last_msg.created_at
-            }
-        return None
-        
-
-class AdminUserListSerializer(serializers.ModelSerializer):
-    profile_picture = serializers.SerializerMethodField()
-    city = serializers.SerializerMethodField()
-
-    class Meta:
-        model = User
-        fields = [
-            'id', 'username', 'full_name', 'email', 'phone',
-            'profile_picture', 'city',
-            'is_banned', 'is_staff', 'date_joined'
-        ]
-
-    def get_profile_picture(self, obj):
-        if hasattr(obj, 'profile') and obj.profile.profile_picture:
-            return obj.profile.profile_picture.url
+            return MessageSerializer(last_msg).data
         return None
 
-    def get_city(self, obj):
-        if hasattr(obj, 'profile'):
-            return obj.profile.city
-        return None
+    def get_unread_count(self, obj):
+        user = self.context.get('request').user
+        return obj.messages.filter(is_read=False).exclude(sender=user).count()

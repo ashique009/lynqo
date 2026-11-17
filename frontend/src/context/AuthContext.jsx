@@ -1,41 +1,34 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
-import { authService } from '../services/authService';
 import { profileService } from '../services/profileService';
+import { wsService } from '../services/websocketService';
 
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
-  const [token, setToken] = useState(localStorage.getItem('lynqo_token'));
-  const [username, setUsername] = useState(localStorage.getItem('lynqo_username'));
-  const [userProfile, setUserProfile] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [hasProfile, setHasProfile] = useState(false);
-
-  // Load profile details if token exists
-  const fetchProfile = async (authToken) => {
-    if (!authToken) {
-      setUserProfile(null);
-      setHasProfile(false);
-      setIsLoading(false);
-      return;
-    }
-    
+  const [token, setToken] = useState(() => localStorage.getItem('lynqo_token'));
+  const [profile, setProfile] = useState(() => {
     try {
-      const response = await profileService.getProfileDetail();
-      if (response.success && response.data) {
-        setUserProfile(response.data);
-        setHasProfile(true);
+      const saved = localStorage.getItem('lynqo_profile');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [isLoading, setIsLoading] = useState(true);
+
+  const fetchCurrentProfile = async (authToken) => {
+    try {
+      const res = await profileService.getProfile();
+      if (res.success && res.profile) {
+        setProfile(res.profile);
+        localStorage.setItem('lynqo_profile', JSON.stringify(res.profile));
+        wsService.connect(authToken);
       } else {
-        setUserProfile(null);
-        setHasProfile(false);
+        clearAuth();
       }
     } catch (err) {
-      // 404 means profile is not yet created
-      if (err.status === 404) {
-        setUserProfile(null);
-        setHasProfile(false);
-      } else {
-        console.error('Error fetching profile detail:', err);
+      if (err.status === 401 || err.status === 403) {
+        clearAuth();
       }
     } finally {
       setIsLoading(false);
@@ -44,127 +37,109 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     if (token) {
-      fetchProfile(token);
+      fetchCurrentProfile(token);
     } else {
       setIsLoading(false);
     }
   }, [token]);
 
-  const login = async (identifier, password) => {
+  const clearAuth = () => {
+    localStorage.removeItem('lynqo_token');
+    localStorage.removeItem('lynqo_profile');
+    setToken(null);
+    setProfile(null);
+    wsService.disconnect();
+  };
+
+  const createProfile = async (displayName, pictureFile) => {
     setIsLoading(true);
     try {
-      const response = await authService.login(identifier, password);
-      if (response.success && response.data) {
-        const { token: authToken, username: userObj } = response.data;
-        localStorage.setItem('lynqo_token', authToken);
-        localStorage.setItem('lynqo_username', userObj);
-        setToken(authToken);
-        setUsername(userObj);
-        // Fetch profile to verify profile setup status
-        await fetchProfile(authToken);
-        return { success: true };
+      const res = await profileService.createProfile(displayName, pictureFile);
+      if (res.success) {
+        const { token: newToken, profile: newProfile, recovery_code } = res;
+        localStorage.setItem('lynqo_token', newToken);
+        localStorage.setItem('lynqo_profile', JSON.stringify(newProfile));
+        setToken(newToken);
+        setProfile(newProfile);
+        wsService.connect(newToken);
+        return { success: true, profile: newProfile, recovery_code };
       }
-      return { success: false, message: response.message || 'Login failed', data: response.data };
+      return { success: false, message: res.message || 'Failed to create profile' };
     } catch (err) {
+      return { success: false, message: err.message || 'Error creating profile' };
+    } finally {
       setIsLoading(false);
-      return { 
-        success: false, 
-        message: err.message || 'Invalid credentials',
-        status: err.status,
-        data: err.data
-      };
     }
   };
 
-  const signup = async (fullName, usernameInput, email, phone, password, confirmPassword) => {
+  const recoverProfile = async (recoveryCode) => {
     setIsLoading(true);
     try {
-      const response = await authService.signup(fullName, usernameInput, email, phone, password, confirmPassword);
-      setIsLoading(false);
-      if (response.success) {
-        return { success: true, data: response.data, message: response.message };
+      const res = await profileService.recoverProfile(recoveryCode);
+      if (res.success) {
+        const { token: newToken, profile: recoveredProfile, new_recovery_code } = res;
+        localStorage.setItem('lynqo_token', newToken);
+        localStorage.setItem('lynqo_profile', JSON.stringify(recoveredProfile));
+        setToken(newToken);
+        setProfile(recoveredProfile);
+        wsService.connect(newToken);
+        return { success: true, profile: recoveredProfile, new_recovery_code };
       }
-      return { success: false, message: response.message || 'Signup failed' };
+      return { success: false, message: res.message || 'Failed to recover profile' };
     } catch (err) {
+      return { success: false, message: err.message || 'Invalid recovery code' };
+    } finally {
       setIsLoading(false);
-      return { 
-        success: false, 
-        message: err.message || 'Signup failed',
-        errors: err.errors 
-      };
     }
   };
 
-  const saveSession = async (authToken, userObj) => {
-    setIsLoading(true);
-    localStorage.setItem('lynqo_token', authToken);
-    localStorage.setItem('lynqo_username', userObj);
-    setToken(authToken);
-    setUsername(userObj);
-    await fetchProfile(authToken);
+  const updateProfile = async ({ displayName, profilePictureFile }) => {
+    try {
+      const res = await profileService.updateProfile({ displayName, profilePictureFile });
+      if (res.success && res.profile) {
+        setProfile(res.profile);
+        localStorage.setItem('lynqo_profile', JSON.stringify(res.profile));
+        return { success: true, profile: res.profile };
+      }
+      return { success: false, message: res.message || 'Failed to update profile' };
+    } catch (err) {
+      return { success: false, message: err.message || 'Error updating profile' };
+    }
+  };
+
+  const regenerateRecoveryCode = async () => {
+    try {
+      const res = await profileService.regenerateRecoveryCode();
+      if (res.success) {
+        return { success: true, recovery_code: res.recovery_code };
+      }
+      return { success: false, message: res.message };
+    } catch (err) {
+      return { success: false, message: err.message || 'Error regenerating recovery code' };
+    }
   };
 
   const logout = async () => {
-    setIsLoading(true);
     try {
-      await authService.logout();
+      await profileService.logout();
     } catch (err) {
-      console.error('Logout API failed:', err);
+      console.warn('Logout error:', err);
     } finally {
-      localStorage.removeItem('lynqo_token');
-      localStorage.removeItem('lynqo_username');
-      setToken(null);
-      setUsername(null);
-      setUserProfile(null);
-      setHasProfile(false);
-      setIsLoading(false);
-    }
-  };
-
-  const refreshProfile = async () => {
-    if (token) {
-      await fetchProfile(token);
-    }
-  };
-
-  const deleteAccount = async (password) => {
-    setIsLoading(true);
-    try {
-      const response = await authService.deleteAccount(password);
-      if (response.success) {
-        localStorage.removeItem('lynqo_token');
-        localStorage.removeItem('lynqo_username');
-        setToken(null);
-        setUsername(null);
-        setUserProfile(null);
-        setHasProfile(false);
-        setIsLoading(false);
-        return { success: true, message: response.message || 'Account deleted successfully.' };
-      } else {
-        setIsLoading(false);
-        return { success: false, message: response.message || 'Failed to delete account.' };
-      }
-    } catch (err) {
-      setIsLoading(false);
-      return {
-        success: false,
-        message: err.message || 'Failed to delete account.',
-      };
+      clearAuth();
     }
   };
 
   const value = {
     token,
-    username,
-    userProfile,
+    profile,
+    isAuthenticated: Boolean(token && profile),
     isLoading,
-    hasProfile,
-    login,
-    signup,
+    createProfile,
+    recoverProfile,
+    updateProfile,
+    regenerateRecoveryCode,
     logout,
-    deleteAccount,
-    saveSession,
-    refreshProfile
+    refreshProfile: () => (token ? fetchCurrentProfile(token) : null),
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

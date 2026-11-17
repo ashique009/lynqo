@@ -1,35 +1,43 @@
-import React from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
-import { 
-  LayoutDashboard, 
-  Sparkles, 
-  UserCheck, 
-  MessageSquare, 
-  Settings,
-  Users,
-  ExternalLink
-} from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { NavLink } from 'react-router-dom';
+import { MessageSquare, UserPlus, UserCheck, Users, Settings } from 'lucide-react';
+import { connectService } from '../services/connectService';
+import { wsService } from '../services/websocketService';
+import { useAuth } from '../context/AuthContext';
 
 export const BottomNavigation = () => {
-  const location = useLocation();
-  const isAdminPath = location.pathname.startsWith('/admin');
+  const { profile } = useAuth();
+  const [pendingCount, setPendingCount] = useState(0);
 
-  const navItems = isAdminPath
-    ? [
-        { name: 'Dashboard', path: '/admin/dashboard', icon: LayoutDashboard },
-        { name: 'Users', path: '/admin/users', icon: Users },
-        { name: 'Settings', path: '/settings', icon: Settings },
-      ]
-    : [
-        { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
-        { name: 'Suggestions', path: '/suggestions', icon: Sparkles },
-        { name: 'Requests', path: '/requests', icon: UserCheck },
-        { name: 'Chats', path: '/conversations', icon: MessageSquare },
-        { name: 'Settings', path: '/settings', icon: Settings },
-      ];
+  const fetchPending = async () => {
+    try {
+      const res = await connectService.getIncomingRequests();
+      if (res.success) {
+        setPendingCount(res.requests?.length || 0);
+      }
+    } catch {
+      // Ignore background errors
+    }
+  };
+
+  useEffect(() => {
+    if (profile) {
+      fetchPending();
+      const unsub = wsService.on('connection_event', () => fetchPending());
+      return () => unsub();
+    }
+  }, [profile]);
+
+  const navItems = [
+    { name: 'Chats', path: '/dashboard', icon: MessageSquare },
+    { name: 'Find', path: '/find', icon: UserPlus },
+    { name: 'Requests', path: '/requests', icon: UserCheck, badge: pendingCount },
+    { name: 'Friends', path: '/connections', icon: Users },
+    { name: 'Settings', path: '/settings', icon: Settings },
+  ];
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-40 md:hidden glass-panel border-t border-[#F4C0D1] dark:border-brand-purple/10 px-2 py-2 flex items-center justify-around shadow-2xl bg-white/90 dark:bg-brand-black/75 backdrop-blur-lg pb-safe-bottom transition-colors duration-200">
+    <nav className="fixed bottom-0 left-0 right-0 z-40 md:hidden border-t border-slate-800 px-2 py-2 flex items-center justify-around shadow-2xl bg-slate-950/90 backdrop-blur-lg pb-safe">
       {navItems.map((item) => {
         const Icon = item.icon;
         return (
@@ -37,17 +45,18 @@ export const BottomNavigation = () => {
             key={item.name}
             to={item.path}
             className={({ isActive }) =>
-              `flex flex-col items-center justify-center flex-1 py-1 rounded-lg gap-1 transition-all duration-200 ${
-                isActive
-                  ? 'text-[#D4537E] dark:text-brand-purple-light font-extrabold'
-                  : 'text-[#5F5E5A] dark:text-slate-500 hover:text-[#2C2C2A] dark:hover:text-slate-300'
+              `relative flex flex-col items-center justify-center flex-1 py-1 rounded-xl gap-1 text-[11px] font-semibold transition-all ${
+                isActive ? 'text-pink-400 font-bold' : 'text-slate-500 hover:text-slate-300'
               }`
             }
           >
-            <Icon className="w-5 h-5" />
-            <span className="text-[10px] font-bold tracking-wide">
-              {item.name}
-            </span>
+            <div className="relative">
+              <Icon className="w-5 h-5" />
+              {item.badge > 0 && (
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-pink-500 rounded-full" />
+              )}
+            </div>
+            <span>{item.name}</span>
           </NavLink>
         );
       })}

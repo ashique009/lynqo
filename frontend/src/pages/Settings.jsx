@@ -1,650 +1,327 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import React, { useState, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import {
+  User, Camera, Copy, Check, Eye, EyeOff, RefreshCw,
+  LogOut, ShieldAlert, KeyRound, Sparkles, CheckCircle2
+} from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { useTheme } from '../context/ThemeContext';
-import { profileService } from '../services/profileService';
-import { authService } from '../services/authService';
-import Loader from '../components/Loader';
-import { Upload, Save, LogOut, Bell, BellOff, Download, Sun, Moon, ShieldCheck, FileText, Trash2, AlertTriangle, Lock, Eye, EyeOff, Headphones } from 'lucide-react';
-import { API_BASE_URL } from '../api/client';
-
-const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY || 'BD57u82r0XebhNJL2PE0cGdLCsGv3zD8iNkTXp2blUwT6rrfm46ws_w5cxbMqMLJsGTfx6Tewq6qtQeOI9eYKc8';
-
-function urlBase64ToUint8Array(base64String) {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding)
-    .replace(/-/g, '+')
-    .replace(/_/g, '/');
-
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
-}
 
 export const Settings = () => {
-  const { userProfile, refreshProfile, logout, deleteAccount } = useAuth();
+  const { profile, updateProfile, regenerateRecoveryCode, logout } = useAuth();
   const { showToast } = useToast();
-  const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
 
-  // Form states
-  const [profilePicture, setProfilePicture] = useState(null);
-  const [picturePreview, setPicturePreview] = useState(null);
-  const [city, setCity] = useState('');
+  const [displayName, setDisplayName] = useState(profile?.display_name || '');
+  const [avatarFile, setAvatarFile] = useState(null);
+  const [avatarPreview, setAvatarPreview] = useState(profile?.profile_picture || null);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [copiedId, setCopiedId] = useState(false);
 
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  // Recovery code management
+  const [recoveryCode, setRecoveryCode] = useState(null);
+  const [showCode, setShowCode] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [showConfirmRegen, setShowConfirmRegen] = useState(false);
 
-  const [isSubscribed, setIsSubscribed] = useState(false);
-  const [loadingPush, setLoadingPush] = useState(false);
-  const [swSupported, setSwSupported] = useState(false);
+  const fileInputRef = useRef(null);
 
-  // Delete account modal states
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [deletePassword, setDeletePassword] = useState('');
-  const [deleteError, setDeleteError] = useState('');
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [showDeletePassword, setShowDeletePassword] = useState(false);
+  const handleAvatarSelect = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
 
-  // PWA installation states
-  const [deferredPrompt, setDeferredPrompt] = useState(window.deferredPrompt || null);
-  const [showInstallButton, setShowInstallButton] = useState(!!window.deferredPrompt);
-  const [showIosFallback, setShowIosFallback] = useState(false);
-  const [isAlreadyInstalled, setIsAlreadyInstalled] = useState(false);
-
-  useEffect(() => {
-    const checkPushSubscription = async () => {
-      if ('serviceWorker' in navigator && 'PushManager' in window) {
-        setSwSupported(true);
-        try {
-          const registration = await navigator.serviceWorker.ready;
-          const subscription = await registration.pushManager.getSubscription();
-          setIsSubscribed(!!subscription);
-        } catch (error) {
-          console.error('Error checking push subscription status:', error);
-        }
-      }
-    };
-    checkPushSubscription();
-  }, []);
-
-  useEffect(() => {
-    
-    const checkStandalone = () => {
-      const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
-      setIsAlreadyInstalled(isStandalone);
-    };
-    checkStandalone();
-
-    const handleBeforeInstallPrompt = (e) => {
-      e.preventDefault();
-      window.deferredPrompt = e;
-      setDeferredPrompt(e);
-      setShowInstallButton(true);
-      setShowIosFallback(false);
-    };
-
-    const handleAppInstalled = () => {
-      window.deferredPrompt = null;
-      setDeferredPrompt(null);
-      setShowInstallButton(false);
-      setIsAlreadyInstalled(true);
-      showToast('Lynqo has been successfully installed!', 'success');
-    };
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    window.addEventListener('appinstalled', handleAppInstalled);
-
-    if (window.deferredPrompt) {
-      setDeferredPrompt(window.deferredPrompt);
-      setShowInstallButton(true);
-    } else {
-      // If we are not already in standalone mode, show fallback text after 4 seconds if prompt doesn't fire
-      const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
-      if (!isStandalone) {
-        const timer = setTimeout(() => {
-          if (!window.deferredPrompt) {
-            setShowIosFallback(true);
-          }
-        }, 4000);
-        return () => {
-          clearTimeout(timer);
-          window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-          window.removeEventListener('appinstalled', handleAppInstalled);
-        };
-      }
-    }
-
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-      window.removeEventListener('appinstalled', handleAppInstalled);
-    };
-  }, [showToast]);
-
-  const handleInstallClick = async () => {
-    const promptEvent = deferredPrompt || window.deferredPrompt;
-    if (!promptEvent) {
-      showToast('Install prompt is not available.', 'error');
+    if (file.size > 5 * 1024 * 1024) {
+      showToast('Image file too large. Max 5MB allowed.', 'error');
       return;
     }
 
-    promptEvent.prompt();
-
-    try {
-      const { outcome } = await promptEvent.userChoice;
-      if (outcome === 'accepted') {
-        showToast('Thank you for installing Lynqo!', 'success');
-        setShowInstallButton(false);
-        setDeferredPrompt(null);
-        window.deferredPrompt = null;
-      } else {
-        showToast('Installation prompt dismissed.', 'info');
-      }
-    } catch (err) {
-      console.error('Error during PWA installation:', err);
-      showToast('Failed to trigger installation.', 'error');
-    }
-  };
-
-  const handlePushToggle = async () => {
-    if (!swSupported) {
-      showToast('Push notifications are not supported on this browser.', 'error');
-      return;
-    }
-
-    setLoadingPush(true);
-    try {
-      if (isSubscribed) {
-        const registration = await navigator.serviceWorker.ready;
-        const subscription = await registration.pushManager.getSubscription();
-        if (subscription) {
-          await authService.unsubscribePush(subscription.endpoint);
-          await subscription.unsubscribe();
-          setIsSubscribed(false);
-          showToast('Unsubscribed from push notifications.', 'info');
-        } else {
-          setIsSubscribed(false);
-        }
-      } else {
-        const permission = await Notification.requestPermission();
-        if (permission !== 'granted') {
-          showToast('Permission for notifications was denied.', 'error');
-          setLoadingPush(false);
-          return;
-        }
-
-        const registration = await navigator.serviceWorker.ready;
-        const applicationServerKey = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
-        const subscription = await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: applicationServerKey
-        });
-
-        const subJson = subscription.toJSON();
-        const payloadKeys = {
-          p256dh: subJson.keys?.p256dh,
-          auth: subJson.keys?.auth
-        };
-
-        await authService.subscribePush(subscription.endpoint, payloadKeys);
-        setIsSubscribed(true);
-        showToast('Successfully subscribed to push notifications!', 'success');
-      }
-    } catch (err) {
-      console.error('Error toggling push notifications:', err);
-      showToast(err.message || 'Failed to update push notification subscription.', 'error');
-    } finally {
-      setLoadingPush(false);
-    }
-  };
-
-  useEffect(() => {
-    const initializeForm = async () => {
-      try {
-        const profileRes = await profileService.getProfileDetail();
-
-        if (profileRes.success && profileRes.data) {
-          const profile = profileRes.data;
-          setCity(profile.city || '');
-          
-          if (profile.profile_picture) {
-            if (profile.profile_picture.startsWith('http')) {
-              setPicturePreview(profile.profile_picture);
-            } else {
-              setPicturePreview(`${API_BASE_URL}${profile.profile_picture}`);
-            }
-          }
-        }
-      } catch (err) {
-        showToast('Failed to load settings details.', 'error');
-      } finally {
-        setLoading(false);
-      }
+    setAvatarFile(file);
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setAvatarPreview(reader.result);
     };
-
-    initializeForm();
-  }, [showToast]);
-
-  const handlePictureChange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      setProfilePicture(file);
-      setPicturePreview(URL.createObjectURL(file));
-    }
+    reader.readAsDataURL(file);
   };
 
-  const handleSave = async (e) => {
+  const handleSaveProfile = async (e) => {
     e.preventDefault();
-
-    setSaving(true);
-    
-    const payload = {
-      city: city.trim(),
-    };
-
-    if (profilePicture) {
-      payload.profile_picture = profilePicture;
+    const trimmed = displayName.trim();
+    if (!trimmed || trimmed.length < 2) {
+      showToast('Display name must be at least 2 characters.', 'error');
+      return;
     }
 
-    try {
-      const response = await profileService.updateProfile(payload);
-      if (response.success) {
-        showToast('Profile settings saved successfully!', 'success');
-        await refreshProfile();
-      } else {
-        showToast(response.message || 'Failed to update profile.', 'error');
-      }
-    } catch (err) {
-      showToast(err.message || 'An error occurred while saving.', 'error');
-    } finally {
-      setSaving(false);
+    setIsUpdating(true);
+    const result = await updateProfile({
+      displayName: trimmed,
+      profilePictureFile: avatarFile,
+    });
+    setIsUpdating(false);
+
+    if (result.success) {
+      showToast('Profile updated successfully!', 'success');
+      setAvatarFile(null);
+    } else {
+      showToast(result.message || 'Failed to update profile.', 'error');
+    }
+  };
+
+  const handleRegenerateCode = async () => {
+    setIsRegenerating(true);
+    const result = await regenerateRecoveryCode();
+    setIsRegenerating(false);
+    setShowConfirmRegen(false);
+
+    if (result.success) {
+      setRecoveryCode(result.recovery_code);
+      setShowCode(true);
+      showToast('New recovery code generated! Please save it.', 'success');
+    } else {
+      showToast(result.message || 'Failed to regenerate recovery code.', 'error');
+    }
+  };
+
+  const copyId = () => {
+    if (profile?.profile_id) {
+      navigator.clipboard.writeText(profile.profile_id);
+      setCopiedId(true);
+      setTimeout(() => setCopiedId(false), 2000);
+      showToast('Profile ID copied!', 'success');
+    }
+  };
+
+  const copyCode = () => {
+    if (recoveryCode) {
+      navigator.clipboard.writeText(recoveryCode);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2000);
+      showToast('Recovery code copied!', 'success');
     }
   };
 
   const handleLogout = async () => {
     await logout();
-    showToast('Logged out successfully.', 'info');
     navigate('/');
+    showToast('Logged out of session.', 'info');
   };
-
-  const handleDeleteAccountSubmit = async (e) => {
-    e.preventDefault();
-    if (!deletePassword.trim()) {
-      setDeleteError('Please enter your password to confirm account deletion.');
-      return;
-    }
-
-    setIsDeleting(true);
-    setDeleteError('');
-
-    const res = await deleteAccount(deletePassword.trim());
-    setIsDeleting(false);
-
-    if (res.success) {
-      showToast(res.message || 'Your account has been permanently deleted.', 'info');
-      setIsDeleteModalOpen(false);
-      navigate('/');
-    } else {
-      setDeleteError(res.message || 'Incorrect password.');
-      showToast(res.message || 'Incorrect password.', 'error');
-    }
-  };
-
-  if (loading) {
-    return <Loader />;
-  }
 
   return (
-    <div className="space-y-6 text-left max-w-3xl mx-auto">
+    <div className="space-y-8 max-w-3xl mx-auto pb-12">
       <div>
-        <h2 className="text-2xl font-extrabold font-display text-[#2C2C2A] dark:text-slate-100">Settings</h2>
-        <p className="text-[#5F5E5A] dark:text-slate-400 text-xs mt-1">
-          Update your location and profile details here.
-        </p>
+        <h1 className="text-2xl font-bold text-white">Profile Settings</h1>
+        <p className="text-sm text-slate-400">Manage your profile details and security recovery code</p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Main Settings Form */}
-        <div className="lg:col-span-2 space-y-6">
-          <form onSubmit={handleSave} className="glass-panel p-6 md:p-8 rounded-3xl border border-[#F4C0D1] dark:border-brand-purple/10 bg-white dark:bg-brand-dark/15 space-y-6 transition-colors duration-200">
-            
-            {/* Profile Pic Upload */}
-            <div className="flex flex-col sm:flex-row items-center gap-5 border-b border-[#F4C0D1] dark:border-slate-900 pb-6">
-              <div className="relative w-20 h-20 rounded-full border border-[#F4C0D1] dark:border-slate-800 flex items-center justify-center overflow-hidden bg-[#FCEEF3] dark:bg-brand-black/40 group flex-shrink-0">
-                {picturePreview ? (
-                  <img src={picturePreview} alt="Avatar" className="w-full h-full object-cover" />
-                ) : (
-                  <Upload className="w-5 h-5 text-[#5F5E5A] dark:text-slate-500" />
-                )}
-                <input
-                  type="file"
-                  accept="image/*"
-                  onChange={handlePictureChange}
-                  className="absolute inset-0 opacity-0 cursor-pointer"
-                  disabled={saving}
-                />
-              </div>
-              
-              <div className="text-center sm:text-left">
-                <div className="text-sm font-bold text-[#2C2C2A] dark:text-slate-200">Change Profile Image</div>
-                <div className="text-xs text-[#5F5E5A] dark:text-slate-500 mt-1">Upload a clear photo to help matches recognize you.</div>
-              </div>
-            </div>
+      {/* Edit Profile Card */}
+      <div className="p-6 md:p-8 rounded-3xl bg-slate-900/80 border border-slate-800 shadow-xl backdrop-blur-xl space-y-6">
+        <h2 className="text-lg font-bold text-white flex items-center gap-2">
+          <User className="w-5 h-5 text-pink-400" />
+          <span>Profile Details</span>
+        </h2>
 
-            {/* City input */}
-            <div className="flex flex-col gap-1.5">
-              <label className="text-xs font-semibold text-[#5F5E5A] dark:text-slate-400">City</label>
-              <input
-                type="text"
-                className="glass-input p-3 rounded-xl text-sm w-full"
-                value={city}
-                onChange={(e) => setCity(e.target.value)}
-                disabled={saving}
-                required
-              />
-            </div>
-
-            {/* Submit */}
-            <button
-              type="submit"
-              className="w-full bg-[#D4537E] hover:bg-[#c2436d] dark:bg-brand-purple dark:hover:bg-brand-purple-dark text-white font-bold py-3.5 rounded-xl transition-all duration-300 border border-transparent dark:border-brand-purple-light/20 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-[#D4537E]/10 dark:shadow-brand-purple/10"
-              disabled={saving}
+        <form onSubmit={handleSaveProfile} className="space-y-6">
+          {/* Avatar Edit */}
+          <div className="flex items-center gap-6">
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleAvatarSelect}
+              accept="image/jpeg,image/png,image/webp"
+              className="hidden"
+            />
+            <div
+              onClick={() => fileInputRef.current?.click()}
+              className="relative w-20 h-20 rounded-2xl overflow-hidden bg-slate-800 border-2 border-pink-500/30 hover:border-pink-500 cursor-pointer group shadow-md shrink-0 transition-colors"
             >
-              {saving ? (
-                <div className="w-5 h-5 rounded-full border-2 border-white/20 border-t-white animate-spin"></div>
+              {avatarPreview ? (
+                <img src={avatarPreview} alt="" className="w-full h-full object-cover" />
               ) : (
-                <>
-                  <Save className="w-4 h-4" />
-                  <span>Save Changes</span>
-                </>
+                <div className="w-full h-full flex items-center justify-center font-bold text-2xl text-pink-400 bg-pink-500/10">
+                  {profile?.display_name?.charAt(0) || 'U'}
+                </div>
               )}
-            </button>
-
-          </form>
-        </div>
-
-        {/* Sidebar Cards */}
-        <div className="space-y-6">
-          {/* Appearance & Theme Card */}
-          <div className="glass-panel p-6 rounded-3xl border border-[#F4C0D1] dark:border-brand-purple/10 bg-white dark:bg-brand-dark/15 flex flex-col gap-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-xl bg-[#D4537E]/10 dark:bg-brand-purple/10 border border-[#D4537E]/20 dark:border-brand-purple/20">
-                {theme === 'dark' ? (
-                  <Moon className="w-5 h-5 text-brand-purple-light" />
-                ) : (
-                  <Sun className="w-5 h-5 text-[#D4537E]" />
-                )}
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-[#2C2C2A] dark:text-slate-200">Appearance</h3>
-                <span className="text-[10px] text-[#5F5E5A] dark:text-slate-500 font-semibold uppercase">
-                  {theme === 'dark' ? 'Dark Mode Active' : 'Light Mode Active'}
-                </span>
+              <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white">
+                <Camera className="w-6 h-6" />
               </div>
             </div>
-            <p className="text-xs text-[#5F5E5A] dark:text-slate-400 leading-relaxed">
-              Switch between soft pink light theme and sleek dark purple workspace aesthetics.
-            </p>
-            
-            <button
-              type="button"
-              onClick={toggleTheme}
-              className="w-full font-bold py-3 rounded-xl transition-all duration-200 cursor-pointer flex items-center justify-center gap-2 text-xs border bg-[#D4537E] hover:bg-[#c2436d] text-white border-transparent shadow-md dark:bg-brand-purple dark:hover:bg-brand-purple-dark dark:border-brand-purple-light/20 shadow-brand-purple/10"
-            >
-              {theme === 'dark' ? (
-                <>
-                  <Sun className="w-4 h-4" />
-                  <span>Switch to Light Mode</span>
-                </>
-              ) : (
-                <>
-                  <Moon className="w-4 h-4" />
-                  <span>Switch to Dark Mode</span>
-                </>
-              )}
-            </button>
-          </div>
 
-          {/* Push Notifications Card */}
-          <div className="glass-panel p-6 rounded-3xl border border-[#F4C0D1] dark:border-brand-purple/10 bg-white dark:bg-brand-dark/15 flex flex-col gap-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 rounded-xl bg-[#D4537E]/10 dark:bg-brand-purple/10 border border-[#D4537E]/20 dark:border-brand-purple/20">
-                {isSubscribed ? (
-                  <Bell className="w-5 h-5 text-[#D4537E] dark:text-brand-purple-light" />
-                ) : (
-                  <BellOff className="w-5 h-5 text-[#5F5E5A] dark:text-slate-400" />
-                )}
-              </div>
-              <div>
-                <h3 className="text-sm font-bold text-[#2C2C2A] dark:text-slate-200">Push Notifications</h3>
-                <span className="text-[10px] text-[#5F5E5A] dark:text-slate-500 font-semibold uppercase">
-                  {swSupported ? (isSubscribed ? 'Enabled' : 'Disabled') : 'Not Supported'}
-                </span>
-              </div>
-            </div>
-            <p className="text-xs text-[#5F5E5A] dark:text-slate-400 leading-relaxed">
-              Get real-time updates when you receive connect requests or new direct messages.
-            </p>
-            
-            {swSupported ? (
+            <div>
               <button
                 type="button"
-                onClick={handlePushToggle}
-                disabled={loadingPush}
-                className={`w-full font-bold py-3 rounded-xl transition-all duration-200 cursor-pointer flex items-center justify-center gap-2 text-xs border ${
-                  isSubscribed
-                    ? 'bg-[#FCEEF3] hover:bg-rose-500/10 text-[#2C2C2A] hover:text-rose-600 border-[#F4C0D1] dark:bg-brand-black/35 dark:text-slate-300 dark:hover:text-rose-400 dark:border-slate-800'
-                    : 'bg-[#D4537E] hover:bg-[#c2436d] dark:bg-brand-purple dark:hover:bg-brand-purple-dark text-white border-transparent dark:border-brand-purple-light/20 shadow-md shadow-[#D4537E]/10 dark:shadow-brand-purple/10'
-                }`}
+                onClick={() => fileInputRef.current?.click()}
+                className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-colors cursor-pointer"
               >
-                {loadingPush ? (
-                  <div className="w-4 h-4 rounded-full border-2 border-white/20 border-t-white animate-spin"></div>
-                ) : isSubscribed ? (
-                  <>
-                    <BellOff className="w-4 h-4" />
-                    <span>Disable Notifications</span>
-                  </>
-                ) : (
-                  <>
-                    <Bell className="w-4 h-4" />
-                    <span>Enable Notifications</span>
-                  </>
-                )}
+                Change Photo
               </button>
-            ) : (
-              <div className="text-center text-xs font-semibold text-[#5F5E5A] dark:text-slate-500 py-2 border border-dashed border-[#F4C0D1] dark:border-slate-800 rounded-xl bg-[#FCEEF3]/50 dark:bg-brand-black/20">
-                Service Worker not supported in this browser.
-              </div>
-            )}
-          </div>
-
-          {/* Install App Card */}
-          {!isAlreadyInstalled && (showInstallButton || showIosFallback) && (
-            <div className="glass-panel p-6 rounded-3xl border border-[#F4C0D1] dark:border-brand-purple/10 bg-white dark:bg-brand-dark/15 flex flex-col gap-4">
-              <div className="flex items-center gap-3">
-                <div className="p-2 rounded-xl bg-[#D4537E]/10 dark:bg-brand-purple/10 border border-[#D4537E]/20 dark:border-brand-purple/20">
-                  <Download className="w-5 h-5 text-[#D4537E] dark:text-brand-purple-light" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-[#2C2C2A] dark:text-slate-200">Install App</h3>
-                  <span className="text-[10px] text-[#5F5E5A] dark:text-slate-500 font-semibold uppercase">
-                    PWA Support
-                  </span>
-                </div>
-              </div>
-              <p className="text-xs text-[#5F5E5A] dark:text-slate-400 leading-relaxed">
-                Install Lynqo on your device for a fast, full-screen, native experience.
-              </p>
-              
-              {showInstallButton ? (
-                <button
-                  type="button"
-                  onClick={handleInstallClick}
-                  className="w-full bg-[#D4537E] hover:bg-[#c2436d] dark:bg-brand-purple dark:hover:bg-brand-purple-dark text-white font-bold py-3 rounded-xl transition-all duration-200 cursor-pointer flex items-center justify-center gap-2 text-xs border border-transparent dark:border-brand-purple-light/20 shadow-md shadow-[#D4537E]/10 dark:shadow-brand-purple/10"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>Install Lynqo</span>
-                </button>
-              ) : showIosFallback ? (
-                <div className="text-[#5F5E5A] dark:text-slate-400 text-xs py-2 px-3 border border-[#F4C0D1] dark:border-brand-purple/15 rounded-xl bg-[#FCEEF3]/50 dark:bg-brand-purple/5 text-center font-medium leading-relaxed">
-                  On iPhone: tap <span className="text-[#D4537E] dark:text-brand-purple-light font-bold">Share</span>, then <span className="text-[#D4537E] dark:text-brand-purple-light font-bold">'Add to Home Screen'</span>
-                </div>
-              ) : null}
-            </div>
-          )}
-
-          {/* Sidebar Account Actions & Danger Zone Card */}
-          <div className="glass-panel p-6 rounded-3xl border border-[#F4C0D1] dark:border-brand-purple/10 bg-white dark:bg-brand-dark/15 flex flex-col gap-4">
-            <h3 className="text-sm font-bold text-[#2C2C2A] dark:text-slate-200">Account Actions</h3>
-            <p className="text-xs text-[#5F5E5A] dark:text-slate-400 leading-relaxed">
-              Log out of your active browser session or permanently delete your account data.
-            </p>
-            
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="w-full bg-rose-500/10 hover:bg-rose-500 text-rose-600 hover:text-white dark:text-rose-400 dark:hover:text-white border border-rose-500/25 font-bold py-3 rounded-xl transition-all duration-200 cursor-pointer flex items-center justify-center gap-2 text-xs"
-            >
-              <LogOut className="w-4 h-4" />
-              <span>Log Out Session</span>
-            </button>
-
-            {/* Severe Destructive Action: Delete Account */}
-            <button
-              type="button"
-              onClick={() => {
-                setDeletePassword('');
-                setDeleteError('');
-                setIsDeleteModalOpen(true);
-              }}
-              className="w-full bg-rose-600 hover:bg-rose-700 text-white font-bold py-3 rounded-xl transition-all duration-200 border border-rose-600/30 shadow-md shadow-rose-600/20 flex items-center justify-center gap-2 text-xs cursor-pointer"
-            >
-              <Trash2 className="w-4 h-4" />
-              <span>Delete Account</span>
-            </button>
-
-            <div className="pt-3 border-t border-[#F4C0D1]/50 dark:border-slate-800/80 flex items-center justify-center gap-3 flex-wrap text-xs">
-              <Link
-                to="/terms"
-                className="inline-flex items-center gap-1 text-[#5F5E5A] hover:text-[#D4537E] dark:text-slate-400 dark:hover:text-brand-purple-light font-medium transition-colors"
-              >
-                <FileText className="w-3.5 h-3.5" />
-                <span className="hover:underline">Terms</span>
-              </Link>
-              <span className="text-[#F4C0D1] dark:text-slate-800">•</span>
-              <Link
-                to="/privacy-policy"
-                className="inline-flex items-center gap-1 text-[#5F5E5A] hover:text-[#D4537E] dark:text-slate-400 dark:hover:text-brand-purple-light font-medium transition-colors"
-              >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span className="hover:underline">Privacy</span>
-              </Link>
-              <span className="text-[#F4C0D1] dark:text-slate-800">•</span>
-              <Link
-                to="/contact-us"
-                className="inline-flex items-center gap-1 text-[#5F5E5A] hover:text-[#D4537E] dark:text-slate-400 dark:hover:text-brand-purple-light font-medium transition-colors"
-              >
-                <Headphones className="w-3.5 h-3.5" />
-                <span className="hover:underline">Contact Us</span>
-              </Link>
+              <p className="text-xs text-slate-500 mt-1.5">JPG, PNG, or WebP (max 5MB)</p>
             </div>
           </div>
-        </div>
+
+          {/* Profile ID (Read Only) */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+              Your Unique Profile ID
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                readOnly
+                value={profile?.profile_id || ''}
+                className="w-full px-4 py-3 rounded-xl bg-slate-950 border border-slate-800 font-mono text-pink-400 font-bold text-sm tracking-wider focus:outline-none cursor-default"
+              />
+              <button
+                type="button"
+                onClick={copyId}
+                className="p-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer shrink-0"
+                title="Copy Profile ID"
+              >
+                {copiedId ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+              </button>
+            </div>
+          </div>
+
+          {/* Display Name Input */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+              Display Name
+            </label>
+            <input
+              type="text"
+              required
+              maxLength={50}
+              value={displayName}
+              onChange={(e) => setDisplayName(e.target.value)}
+              className="w-full px-4 py-3 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-600 text-sm focus:outline-none focus:border-pink-500 focus:ring-1 focus:ring-pink-500 transition-all"
+            />
+          </div>
+
+          <button
+            type="submit"
+            disabled={isUpdating || !displayName.trim()}
+            className="px-6 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 disabled:opacity-50 transition-all shadow-md shadow-pink-500/20 text-xs cursor-pointer"
+          >
+            {isUpdating ? 'Saving...' : 'Save Changes'}
+          </button>
+        </form>
       </div>
 
-      {/* Delete Account Confirmation Modal */}
-      {isDeleteModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="glass-panel max-w-md w-full p-6 md:p-8 rounded-3xl border border-rose-500/30 bg-white dark:bg-brand-dark/95 text-left space-y-5 shadow-2xl relative z-10">
-            <div className="flex items-center gap-3">
-              <div className="p-3 rounded-2xl bg-rose-500/15 border border-rose-500/30 text-rose-500 flex-shrink-0">
-                <AlertTriangle className="w-6 h-6" />
+      {/* Security & Recovery Code Section */}
+      <div className="p-6 md:p-8 rounded-3xl bg-slate-900/80 border border-slate-800 shadow-xl backdrop-blur-xl space-y-6">
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-bold text-white flex items-center gap-2">
+            <KeyRound className="w-5 h-5 text-amber-400" />
+            <span>Profile Recovery Code</span>
+          </h2>
+        </div>
+
+        <p className="text-xs text-slate-400 leading-relaxed">
+          Your recovery code is the <strong>only way</strong> to restore your account if your browser session is lost or cookies are cleared. It is stored securely hashed on the server.
+        </p>
+
+        {recoveryCode ? (
+          <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-2">
+            <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider block">
+              Active Recovery Code
+            </span>
+            <div className="flex items-center justify-between bg-slate-950 p-3 rounded-xl border border-amber-500/20">
+              <span className="font-mono text-sm md:text-base font-bold text-amber-300 tracking-wider">
+                {showCode ? recoveryCode : '••••••••••••••••••••'}
+              </span>
+              <div className="flex items-center gap-1.5 ml-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCode(!showCode)}
+                  className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer"
+                >
+                  {showCode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={copyCode}
+                  className="p-2 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 transition-colors cursor-pointer"
+                >
+                  {copiedCode ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                </button>
               </div>
+            </div>
+          </div>
+        ) : (
+          <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <ShieldAlert className="w-5 h-5 text-amber-400 shrink-0" />
               <div>
-                <h3 className="text-lg font-extrabold font-display text-[#2C2C2A] dark:text-slate-100">
-                  Delete Account Permanently
-                </h3>
-                <p className="text-xs text-rose-500 font-semibold mt-0.5">
-                  Warning: This action is permanent and cannot be undone.
-                </p>
+                <h4 className="text-xs font-semibold text-slate-200">Generate a fresh recovery code</h4>
+                <p className="text-[11px] text-slate-500">Need to view or update your recovery code?</p>
               </div>
             </div>
 
-            <p className="text-xs text-[#5F5E5A] dark:text-slate-400 leading-relaxed">
-              All your profile information, chat messages, connection requests, and preferences will be permanently erased. Enter your password to confirm.
-            </p>
+            <button
+              onClick={() => setShowConfirmRegen(true)}
+              className="px-4 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-bold transition-colors cursor-pointer shrink-0"
+            >
+              Generate New Code
+            </button>
+          </div>
+        )}
 
-            <form onSubmit={handleDeleteAccountSubmit} className="space-y-4">
-              <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-[#5F5E5A] dark:text-slate-400">
-                  Account Password
-                </label>
-                <div className="relative">
-                  <Lock className="absolute left-3.5 top-3.5 w-4 h-4 text-[#5F5E5A] dark:text-slate-500" />
-                  <input
-                    type={showDeletePassword ? 'text' : 'password'}
-                    className={`w-full glass-input pl-10 pr-10 py-3 rounded-xl text-sm ${
-                      deleteError ? 'border-rose-500 focus:border-rose-500' : ''
-                    }`}
-                    placeholder="Enter password to confirm"
-                    value={deletePassword}
-                    onChange={(e) => {
-                      setDeletePassword(e.target.value);
-                      setDeleteError('');
-                    }}
-                    disabled={isDeleting}
-                    required
-                    autoFocus
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowDeletePassword(!showDeletePassword)}
-                    className="absolute right-3.5 top-3.5 text-slate-400 hover:text-slate-200 cursor-pointer"
-                  >
-                    {showDeletePassword ? (
-                      <EyeOff className="w-4 h-4" />
-                    ) : (
-                      <Eye className="w-4 h-4" />
-                    )}
-                  </button>
-                </div>
-                {deleteError && (
-                  <p className="text-xs text-rose-400 font-semibold mt-1">
-                    {deleteError}
-                  </p>
-                )}
-              </div>
+        {recoveryCode && (
+          <button
+            onClick={() => setShowConfirmRegen(true)}
+            className="text-xs text-slate-400 hover:text-amber-400 flex items-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Regenerate a new recovery code</span>
+          </button>
+        )}
+      </div>
 
-              <div className="flex items-center justify-end gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsDeleteModalOpen(false)}
-                  disabled={isDeleting}
-                  className="px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-[#2C2C2A] dark:text-slate-300 transition-colors cursor-pointer disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isDeleting}
-                  className="px-5 py-2.5 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white transition-all cursor-pointer shadow-md shadow-rose-600/20 disabled:opacity-50 flex items-center gap-2"
-                >
-                  {isDeleting ? (
-                    <div className="w-4 h-4 rounded-full border-2 border-white/20 border-t-white animate-spin" />
-                  ) : (
-                    <>
-                      <Trash2 className="w-4 h-4" />
-                      <span>Permanently Delete</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
+      {/* Disconnect Session */}
+      <div className="p-6 md:p-8 rounded-3xl bg-slate-900/80 border border-slate-800 shadow-xl backdrop-blur-xl flex items-center justify-between gap-4">
+        <div>
+          <h3 className="text-base font-bold text-white">Log Out / End Session</h3>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Clears your local session cookie. Make sure you saved your recovery code first!
+          </p>
+        </div>
+
+        <button
+          onClick={handleLogout}
+          className="px-5 py-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
+        >
+          <LogOut className="w-4 h-4" />
+          <span>Log Out</span>
+        </button>
+      </div>
+
+      {/* Confirm Regeneration Modal */}
+      {showConfirmRegen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 max-w-sm w-full shadow-2xl space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto">
+              <ShieldAlert className="w-6 h-6" />
+            </div>
+            <div className="text-center space-y-1">
+              <h3 className="text-lg font-bold text-white">Regenerate Recovery Code?</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                This will immediately invalidate your previous recovery code. Make sure to save the new one!
+              </p>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => setShowConfirmRegen(false)}
+                className="flex-1 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleRegenerateCode}
+                disabled={isRegenerating}
+                className="flex-1 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-black text-xs font-bold cursor-pointer transition-colors"
+              >
+                {isRegenerating ? 'Generating...' : 'Confirm & Generate'}
+              </button>
+            </div>
           </div>
         </div>
       )}

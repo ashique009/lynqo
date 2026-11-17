@@ -1,5 +1,7 @@
 # Environment
 .env
+.env.*
+!.env.example
 myenv/
 venv/
 
@@ -7,10 +9,18 @@ venv/
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 db.sqlite3
 
-# Media
+# Static & Media
+media/
+staticfiles/
 profile_pics/
+
+# Node
+node_modules/
+frontend/node_modules/
+frontend/dist/
 
 # IDE
 .vscode/
@@ -22,6 +32,4 @@ profile_pics/
 # Secrets
 *.pem
 private_key.pem
-public_key.pem. e n v 
- 
- 
+public_key.pem

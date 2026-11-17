@@ -1,205 +1,300 @@
-import React from 'react';
-import { Link } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
-import { 
-  Sparkles, 
-  UserCheck, 
-  MessageSquare, 
-  CheckCircle2, 
-  XCircle, 
-  ArrowRight,
-  MapPin
+import React, { useState, useEffect } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
+import {
+  MessageSquare, UserPlus, Users, Search, Copy, Check,
+  Sparkles, CheckCheck, Clock, UserCheck
 } from 'lucide-react';
-import { API_BASE_URL } from '../api/client';
+import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
+import { chatService } from '../services/chatService';
+import { connectService } from '../services/connectService';
+import { wsService } from '../services/websocketService';
+import Loader from '../components/Loader';
 
 export const HomeDashboard = () => {
-  const { userProfile, username } = useAuth();
+  const { profile } = useAuth();
+  const { showToast } = useToast();
+  const navigate = useNavigate();
 
-  const getProfilePictureUrl = () => {
-    if (userProfile && userProfile.profile_picture) {
-      if (userProfile.profile_picture.startsWith('http')) return userProfile.profile_picture;
-      return `${API_BASE_URL}${userProfile.profile_picture}`;
+  const [conversations, setConversations] = useState([]);
+  const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
+  const [search, setSearch] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [copiedId, setCopiedId] = useState(false);
+
+  const loadData = async () => {
+    setIsLoading(true);
+    try {
+      const [convRes, reqRes] = await Promise.all([
+        chatService.getConversations(),
+        connectService.getIncomingRequests(),
+      ]);
+      if (convRes.success) {
+        setConversations(convRes.conversations || []);
+      }
+      if (reqRes.success) {
+        setPendingRequestsCount(reqRes.requests?.length || 0);
+      }
+    } catch (err) {
+      console.error('Failed to load dashboard data:', err);
+    } finally {
+      setIsLoading(false);
     }
-    return null;
   };
 
-  const avatarUrl = getProfilePictureUrl();
-  const completion = userProfile?.profile_completion || { percentage: 0, breakdown: {} };
+  useEffect(() => {
+    loadData();
 
-  const stats = [
-    {
-      label: 'City Location',
-      value: userProfile?.city || 'Not Set',
-      icon: MapPin,
-      color: 'text-indigo-400'
+    // Listen for real-time conversation updates
+    const unsubConv = wsService.on('conversation_update', (event) => {
+      setConversations((prev) => {
+        const existingIdx = prev.findIndex((c) => c.id === event.conversation_id);
+        if (existingIdx !== -1) {
+          const updated = [...prev];
+          updated[existingIdx] = {
+            ...updated[existingIdx],
+            last_message: event.message,
+            unread_count: (updated[existingIdx].unread_count || 0) + 1,
+            updated_at: event.message.created_at,
+          };
+          // Move to top
+          const [moved] = updated.splice(existingIdx, 1);
+          return [moved, ...updated];
+        } else {
+          loadData();
+          return prev;
+        }
+      });
+    });
+
+    const unsubPresence = wsService.on('presence_update', (event) => {
+      setConversations((prev) =>
+        prev.map((c) => {
+          if (c.other_participant?.profile_id === event.profile_id) {
+            return {
+              ...c,
+              other_participant: {
+                ...c.other_participant,
+                is_online: event.is_online,
+                last_seen: event.last_seen,
+              },
+            };
+          }
+          return c;
+        })
+      );
+    });
+
+    const unsubConn = wsService.on('connection_event', () => {
+      loadData();
+    });
+
+    return () => {
+      unsubConv();
+      unsubPresence();
+      unsubConn();
+    };
+  }, []);
+
+  const copyId = () => {
+    if (profile?.profile_id) {
+      navigator.clipboard.writeText(profile.profile_id);
+      setCopiedId(true);
+      setTimeout(() => setCopiedId(false), 2000);
+      showToast('Profile ID copied!', 'success');
     }
-  ];
+  };
+
+  const filteredConversations = conversations.filter((c) => {
+    const q = search.toLowerCase();
+    const name = c.other_participant?.display_name?.toLowerCase() || '';
+    const id = c.other_participant?.profile_id?.toLowerCase() || '';
+    return name.includes(q) || id.includes(q);
+  });
+
+  const formatTime = (isoString) => {
+    if (!isoString) return '';
+    const date = new Date(isoString);
+    const now = new Date();
+    const isToday = date.toDateString() === now.toDateString();
+    if (isToday) {
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  };
 
   return (
-    <div className="space-y-8 text-left">
-      {/* Welcome Banner */}
-      <div className="glass-panel p-6 md:p-8 rounded-3xl border border-[#F4C0D1] dark:border-brand-purple/15 flex flex-col md:flex-row items-center justify-between gap-6 bg-white dark:bg-brand-dark/20 relative overflow-hidden transition-colors duration-200">
-        <div className="absolute top-[-50px] right-[-50px] w-48 h-48 rounded-full bg-[#D4537E]/10 dark:bg-brand-purple/10 blur-3xl pointer-events-none" />
-        
-        <div className="flex items-center gap-5">
-          {avatarUrl ? (
-            <img
-              src={avatarUrl}
-              alt={userProfile?.full_name || username}
-              className="w-16 h-16 rounded-full object-cover border-2 border-[#D4537E]/30 dark:border-brand-purple/30 shadow-lg"
-            />
-          ) : (
-            <div className="w-16 h-16 rounded-full bg-[#D4537E]/15 dark:bg-brand-purple/20 flex items-center justify-center border-2 border-[#D4537E]/30 dark:border-brand-purple/30 text-[#D4537E] dark:text-brand-purple-light text-xl font-bold uppercase">
-              {username ? username.substring(0, 2) : 'CK'}
-            </div>
-          )}
-          <div>
-            <h2 className="text-2xl md:text-3xl font-extrabold text-[#2C2C2A] dark:text-slate-100 font-display">
-              Hello, {userProfile?.full_name?.split(' ')[0] || username}!
-            </h2>
-            <p className="text-[#5F5E5A] dark:text-slate-400 text-sm mt-1">
-              Welcome back to your Lynqo dashboard. Connect Beyond Chats.
-            </p>
-          </div>
-        </div>
-
-        <Link
-          to="/suggestions"
-          className="flex items-center gap-2 bg-[#D4537E] hover:bg-[#c2436d] dark:bg-brand-purple dark:hover:bg-brand-purple-dark text-white px-5 py-3 rounded-2xl text-sm font-bold transition-all duration-300 shadow-lg shadow-[#D4537E]/20 dark:shadow-brand-purple/20 border border-transparent dark:border-brand-purple-light/20 cursor-pointer flex-shrink-0"
-        >
-          <Sparkles className="w-4 h-4" />
-          <span>Explore Suggestions</span>
-          <ArrowRight className="w-4 h-4" />
-        </Link>
-      </div>
-
-      {/* Grid Stats */}
-      <div className="grid grid-cols-1 gap-6">
-        {stats.map((stat, i) => {
-          const Icon = stat.icon;
-          return (
-            <div key={i} className="glass-panel p-6 rounded-2xl border border-[#F4C0D1] dark:border-brand-purple/10 flex items-center gap-4 bg-white dark:bg-brand-dark/10">
-              <div className={`p-3 rounded-xl bg-[#FCEEF3] dark:bg-brand-black/40 border border-[#F4C0D1] dark:border-slate-800 ${stat.color}`}>
-                <Icon className="w-5 h-5" />
+    <div className="space-y-6 max-w-4xl mx-auto">
+      {/* Profile Banner */}
+      <div className="p-6 md:p-8 rounded-3xl bg-slate-900/80 border border-slate-800 shadow-xl backdrop-blur-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
+        <div className="flex items-center gap-4">
+          <div className="relative w-16 h-16 rounded-2xl overflow-hidden bg-slate-800 border-2 border-pink-500/30 shrink-0 shadow-md">
+            {profile?.profile_picture ? (
+              <img src={profile.profile_picture} alt="" className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center font-bold text-2xl text-pink-400 bg-pink-500/10">
+                {profile?.display_name?.charAt(0) || 'U'}
               </div>
-              <div>
-                <div className="text-[10px] font-extrabold text-[#5F5E5A] dark:text-slate-500 uppercase tracking-widest">{stat.label}</div>
-                <div className="text-[#2C2C2A] dark:text-slate-200 font-bold text-base mt-0.5">{stat.value}</div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Profile Completion Box */}
-        <div className="lg:col-span-2 glass-panel p-6 md:p-8 rounded-3xl border border-[#F4C0D1] dark:border-brand-purple/10 bg-white dark:bg-brand-dark/10 flex flex-col justify-between">
-          <div>
-            <h3 className="text-lg font-bold font-display text-[#2C2C2A] dark:text-slate-100 mb-2">Profile Setup Checklist</h3>
-            <p className="text-xs text-[#5F5E5A] dark:text-slate-400 mb-6">Complete your profile elements to fetch recommendations.</p>
-            
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {Object.entries(completion.breakdown || {}).map(([field, completed]) => (
-                <div
-                  key={field}
-                  className={`flex items-center gap-3 p-3.5 rounded-xl border text-xs font-semibold ${
-                    completed
-                      ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-600 dark:text-emerald-400'
-                      : 'bg-rose-500/10 border-rose-500/20 text-rose-600 dark:text-rose-400'
-                  }`}
-                >
-                  {completed ? (
-                    <CheckCircle2 className="w-4.5 h-4.5 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
-                  ) : (
-                    <XCircle className="w-4.5 h-4.5 text-rose-600 dark:text-rose-400 flex-shrink-0" />
-                  )}
-                  <span>{field}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="mt-8 flex flex-col sm:flex-row items-center gap-5 border-t border-[#F4C0D1] dark:border-slate-900 pt-6">
-            <div className="relative w-16 h-16 flex-shrink-0">
-              <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
-                <path
-                  className="text-pink-200 dark:text-slate-800"
-                  strokeWidth="3.5"
-                  stroke="currentColor"
-                  fill="none"
-                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                />
-                <path
-                  className="text-[#D4537E] dark:text-brand-purple"
-                  strokeWidth="3.5"
-                  strokeDasharray={`${completion.percentage}, 100`}
-                  strokeLinecap="round"
-                  stroke="currentColor"
-                  fill="none"
-                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                />
-              </svg>
-              <div className="absolute inset-0 flex items-center justify-center text-xs font-extrabold text-[#2C2C2A] dark:text-slate-200">
-                {completion.percentage}%
-              </div>
-            </div>
-            
-            <div className="text-center sm:text-left flex-grow">
-              <div className="text-sm font-bold text-[#2C2C2A] dark:text-slate-300">
-                {completion.percentage === 100 ? 'Your profile is complete!' : 'Finish your profile setup'}
-              </div>
-              <div className="text-xs text-[#5F5E5A] dark:text-slate-500 mt-1">
-                {completion.percentage === 100 
-                  ? 'Excellent job! You are visible to all matching users nearby.'
-                  : 'Add a profile picture and city to reach 100%.'}
-              </div>
-            </div>
-
-            {completion.percentage < 100 && (
-              <Link
-                to="/settings"
-                className="text-xs font-bold text-[#D4537E] dark:text-brand-purple-light hover:underline flex items-center gap-1 cursor-pointer select-none"
-              >
-                <span>Edit Profile</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </Link>
             )}
+            <span className="absolute bottom-1 right-1 w-3.5 h-3.5 bg-emerald-500 border-2 border-slate-900 rounded-full" />
+          </div>
+
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-bold text-white">{profile?.display_name}</h2>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-pink-500/10 border border-pink-500/20 text-pink-400">
+                Active
+              </span>
+            </div>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-xs text-slate-400 font-mono font-medium">
+                ID: {profile?.profile_id}
+              </span>
+              <button
+                onClick={copyId}
+                className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                title="Copy Profile ID"
+              >
+                {copiedId ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Quick Links Box */}
-        <div className="glass-panel p-6 rounded-3xl border border-[#F4C0D1] dark:border-brand-purple/10 bg-white dark:bg-brand-dark/10 flex flex-col justify-between">
-          <h3 className="text-lg font-bold font-display text-[#2C2C2A] dark:text-slate-100 mb-2">Connect Hub</h3>
-          <p className="text-xs text-[#5F5E5A] dark:text-slate-400 mb-6">Manage conversations and pending connection invitations.</p>
-
-          <div className="flex flex-col gap-3">
-            <Link
-              to="/requests"
-              className="flex items-center justify-between p-4 rounded-2xl bg-[#FCEEF3]/70 dark:bg-brand-black/50 border border-[#F4C0D1] dark:border-slate-800 hover:border-[#D4537E]/40 dark:hover:border-brand-purple/40 hover:bg-[#D4537E]/5 dark:hover:bg-brand-purple/5 transition-all duration-200 cursor-pointer"
-            >
-              <div className="flex items-center gap-3">
-                <UserCheck className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-                <span className="text-sm font-bold text-[#2C2C2A] dark:text-slate-200">Pending Invites</span>
-              </div>
-              <ArrowRight className="w-4 h-4 text-[#5F5E5A] dark:text-slate-500" />
-            </Link>
-
-            <Link
-              to="/conversations"
-              className="flex items-center justify-between p-4 rounded-2xl bg-[#FCEEF3]/70 dark:bg-brand-black/50 border border-[#F4C0D1] dark:border-slate-800 hover:border-[#D4537E]/40 dark:hover:border-brand-purple/40 hover:bg-[#D4537E]/5 dark:hover:bg-brand-purple/5 transition-all duration-200 cursor-pointer"
-            >
-              <div className="flex items-center gap-3">
-                <MessageSquare className="w-5 h-5 text-[#D4537E] dark:text-purple-400" />
-                <span className="text-sm font-bold text-[#2C2C2A] dark:text-slate-200">My Conversations</span>
-              </div>
-              <ArrowRight className="w-4 h-4 text-[#5F5E5A] dark:text-slate-500" />
-            </Link>
-          </div>
-
-          <div className="mt-8 p-4 bg-[#FCEEF3]/50 dark:bg-brand-black/30 border border-[#F4C0D1] dark:border-slate-900 rounded-2xl text-[11px] text-[#5F5E5A] dark:text-slate-500 font-semibold leading-relaxed">
-            Note: Lynqo enforces strict invitation approval before opening messaging. Send connect requests to chat!
-          </div>
+        {/* Quick Action Buttons */}
+        <div className="flex items-center gap-3 w-full sm:w-auto justify-start sm:justify-end">
+          <Link
+            to="/find"
+            className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 text-white text-xs font-bold shadow-md shadow-pink-500/20 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <UserPlus className="w-4 h-4" />
+            <span>Find Friend</span>
+          </Link>
+          <Link
+            to="/requests"
+            className="relative px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
+          >
+            <UserCheck className="w-4 h-4" />
+            <span className="hidden sm:inline">Requests</span>
+            {pendingRequestsCount > 0 && (
+              <span className="w-5 h-5 rounded-full bg-pink-500 text-white text-[10px] font-bold flex items-center justify-center">
+                {pendingRequestsCount}
+              </span>
+            )}
+          </Link>
         </div>
+      </div>
+
+      {/* Conversations Section Header */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <MessageSquare className="w-5 h-5 text-pink-400" />
+            <h3 className="text-lg font-bold text-white">Your Conversations</h3>
+          </div>
+          <Link
+            to="/connections"
+            className="text-xs text-slate-400 hover:text-pink-400 transition-colors flex items-center gap-1"
+          >
+            <Users className="w-3.5 h-3.5" />
+            <span>View All Connections</span>
+          </Link>
+        </div>
+
+        {/* Search Filter */}
+        {conversations.length > 0 && (
+          <div className="relative">
+            <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+            <input
+              type="text"
+              placeholder="Search conversations..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="w-full pl-11 pr-4 py-3 rounded-2xl bg-slate-900/80 border border-slate-800 text-white placeholder-slate-500 text-xs focus:outline-none focus:border-pink-500"
+            />
+          </div>
+        )}
+
+        {/* Conversations List */}
+        {isLoading ? (
+          <div className="py-16 flex justify-center">
+            <Loader />
+          </div>
+        ) : conversations.length === 0 ? (
+          <div className="py-16 text-center rounded-3xl bg-slate-900/40 border border-slate-800/60 p-8 space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-slate-800/80 text-slate-500 flex items-center justify-center mx-auto">
+              <MessageSquare className="w-6 h-6" />
+            </div>
+            <div>
+              <h4 className="text-base font-semibold text-slate-300">No active conversations yet</h4>
+              <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
+                Find someone by Profile ID or share your link to start your first chat!
+              </p>
+            </div>
+            <Link
+              to="/find"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-pink-500 text-white text-xs font-bold shadow-md shadow-pink-500/20 hover:bg-pink-600 transition-all cursor-pointer"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>Connect with Someone</span>
+            </Link>
+          </div>
+        ) : (
+          <div className="grid gap-2.5">
+            {filteredConversations.map((conv) => (
+              <div
+                key={conv.id}
+                onClick={() => navigate(`/chat/${conv.id}`)}
+                className="p-4 rounded-2xl bg-slate-900/80 hover:bg-slate-800/80 border border-slate-800/80 hover:border-slate-700/80 transition-all cursor-pointer flex items-center justify-between gap-4 backdrop-blur-sm group"
+              >
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="relative w-12 h-12 rounded-xl overflow-hidden bg-slate-800 border border-slate-700 shrink-0">
+                    {conv.other_participant?.profile_picture ? (
+                      <img
+                        src={conv.other_participant.profile_picture}
+                        alt=""
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center font-bold text-pink-400 bg-pink-500/10">
+                        {conv.other_participant?.display_name?.charAt(0) || 'U'}
+                      </div>
+                    )}
+                    {conv.other_participant?.is_online && (
+                      <span className="absolute bottom-0.5 right-0.5 w-2.5 h-2.5 bg-emerald-500 border-2 border-slate-900 rounded-full" />
+                    )}
+                  </div>
+
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h4 className="font-bold text-sm text-white group-hover:text-pink-400 transition-colors truncate">
+                        {conv.other_participant?.display_name}
+                      </h4>
+                      <span className="font-mono text-[11px] text-slate-500 font-semibold shrink-0">
+                        {conv.other_participant?.profile_id}
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-slate-400 truncate mt-0.5 max-w-xs sm:max-w-md">
+                      {conv.last_message?.content || 'No messages yet'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-col items-end gap-1.5 shrink-0">
+                  <span className="text-[11px] text-slate-500">
+                    {formatTime(conv.last_message?.created_at || conv.updated_at)}
+                  </span>
+                  {conv.unread_count > 0 && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-pink-500 text-white">
+                      {conv.unread_count}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

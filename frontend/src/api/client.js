@@ -1,9 +1,14 @@
 import axios from 'axios';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+const API_BASE_URL = import.meta.env.VITE_API_URL || (
+  typeof window !== 'undefined' && window.location.origin.includes(':5173')
+    ? 'http://127.0.0.1:8000'
+    : ''
+);
 
 const client = axios.create({
   baseURL: API_BASE_URL,
+  withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -14,60 +19,53 @@ client.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('lynqo_token');
     if (token) {
-      config.headers.Authorization = `Token ${token}`;
+      config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
   },
-  (error) => {
-    return Promise.reject(error);
-  }
+  (error) => Promise.reject(error)
 );
 
 // Response Interceptor: Parse envelopes and handle global errors
 client.interceptors.response.use(
   (response) => {
-    // If request succeeded, return the response data directly.
-    // The structure will be: { success: boolean, message: string, data: any }
     return response.data;
   },
   (error) => {
     const originalRequest = error.config;
-
-    // Handle 401 Unauthorized (session expired or token deleted)
-    if (error.response && error.response.status === 401 && !originalRequest._retry) {
+    if (error.response && error.response.status === 401 && !originalRequest?._retry) {
       localStorage.removeItem('lynqo_token');
-      localStorage.removeItem('lynqo_username');
-      // Redirect to login if not already there
-      if (!window.location.pathname.includes('/login') && !window.location.pathname.includes('/signup') && window.location.pathname !== '/') {
-        window.location.href = '/login?expired=true';
+      localStorage.removeItem('lynqo_profile');
+      if (
+        typeof window !== 'undefined' &&
+        window.location.pathname !== '/' &&
+        !window.location.pathname.startsWith('/recover')
+      ) {
+        window.location.href = '/?session_expired=true';
       }
     }
 
-    // Extract detailed error messages from backend custom_exception_handler
     let errorMessage = 'An unexpected error occurred.';
     let errors = null;
 
     if (error.response && error.response.data) {
       const data = error.response.data;
-      errorMessage = data.message || errorMessage;
+      errorMessage = data.message || (typeof data === 'string' ? data : errorMessage);
       errors = data.errors || null;
     } else if (error.message) {
       errorMessage = error.message;
     }
 
-    const customError = {
+    return Promise.reject({
       message: errorMessage,
       errors: errors,
       status: error.response ? error.response.status : null,
-      data: error.response && error.response.data ? error.response.data.data : null,
-      originalError: error
-    };
-
-    return Promise.reject(customError);
+      data: error.response && error.response.data ? error.response.data : null,
+      originalError: error,
+    });
   }
 );
 
 export default client;
-const API_URL = API_BASE_URL;
-export { API_BASE_URL, API_URL };
+export { API_BASE_URL, API_BASE_URL as API_URL };
 

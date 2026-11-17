@@ -1,812 +1,707 @@
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status, permissions
-from rest_framework.authtoken.models import Token
-from django.contrib.auth import authenticate, get_user_model
-from django.db import models
+import secrets
+from asgiref.sync import async_to_sync
+from channels.layers import get_channel_layer
+from django.conf import settings
+from django.contrib.auth.hashers import make_password, check_password
+from django.db import transaction, models
 from django.utils import timezone
-from datetime import timedelta
-from .utils import success_response, IsAdminUser, send_push_notification,send_otp_email, generate_otp
-import resend
-from django.conf import settings as django_settings
-from .serializers import (
-    SignupSerializer, LoginSerializer, ProfileSerializer,
-    InterestSerializer, ConnectRequestSerializer,
-    ConversationSerializer, MessageSerializer,AdminUserListSerializer
+from rest_framework import permissions, status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+
+from .auth import SESSION_COOKIE_NAME
+from .models import (
+    User, Profile, ProfileSession, ConnectRequest, Conversation, Message
 )
-from .models import Profile, Interest, ConnectRequest, Conversation, Message,PasswordResetToken,PushSubscription,TypingStatus,EmailOTP
+from .serializers import (
+    ProfileCreateSerializer, ProfileUpdateSerializer, ProfileDetailSerializer,
+    ProfilePublicSerializer, ConnectRequestSerializer, ConversationSerializer,
+    MessageSerializer
+)
 
-User = get_user_model()
 
-#signup view
-class SignupView(APIView):
-    permission_classes = [permissions.AllowAny]
+def set_session_cookie(response, token):
+    samesite = 'None' if not settings.DEBUG else 'Lax'
+    secure = not settings.DEBUG
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=token,
+        max_age=365 * 24 * 3600,  # 1 year
+        httponly=True,
+        samesite=samesite,
+        secure=secure,
+        path='/'
+    )
 
-    def post(self, request):
-        serializer = SignupSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.save()
-        token, _ = Token.objects.get_or_create(user=user)
 
-        # Email OTP ayakkuka
-        otp_code = generate_otp()
-        EmailOTP.objects.create(user=user, otp_code=otp_code)
-        send_otp_email(user, otp_code)
+def clear_session_cookie(response):
+    response.delete_cookie(
+        key=SESSION_COOKIE_NAME,
+        path='/'
+    )
 
-        return success_response(
-            message="Signup successful. Please check your email for the verification code.",
-            data={"user_id": user.id, "token": token.key, "username": user.username},
-            status_code=status.HTTP_201_CREATED
-        )
 
-#login view
-class LoginView(APIView):
-    permission_classes = [permissions.AllowAny]
+def generate_recovery_code(profile_id):
+    """
+    Format: REC-<suffix>-<8 alphanumeric chars>
+    Allows O(1) indexed lookup by suffix + cryptographic hash check.
+    """
+    suffix = profile_id.split('-')[1]
+    alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+    code_part = "".join(secrets.choice(alphabet) for _ in range(8))
+    return f"REC-{suffix}-{code_part}"
 
-    def post(self, request):
-        serializer = LoginSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
 
-        identifier = serializer.validated_data['identifier']
-        password = serializer.validated_data['password']
+# ============================================================================
+# PHASE 2 — PASSWORDLESS PROFILE SYSTEM VIEWS
+# ============================================================================
 
-        user_obj = User.objects.filter(email=identifier).first() or \
-                   User.objects.filter(username=identifier).first()
-
-        if user_obj is None:
-            return success_response(message="Invalid credentials", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-
-        user = authenticate(username=user_obj.username, password=password)
-
-        if user is None:
-            return success_response(message="Invalid credentials", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-        if user.is_banned:
-            return success_response(
-                message="Your account has been banned. Please contact support.",
-                data=None,
-                status_code=status.HTTP_403_FORBIDDEN
-            )
-        if not user.is_email_verified:
-            return success_response(
-                message="Please verify your email before logging in.",
-                data={"email_verification_required": True, "user_id": user.id},
-                status_code=status.HTTP_403_FORBIDDEN
-            )
-        token, _ = Token.objects.get_or_create(user=user)
-        return success_response(
-            message="Login successful",
-            data={"token": token.key, "username": user.username},
-            status_code=status.HTTP_200_OK
-        )
-
-#logout view
-class LogoutView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request):
-        request.user.auth_token.delete()
-        return success_response(message="Logout successful", data=None, status_code=status.HTTP_200_OK)
-
-#profile create view
 class ProfileCreateView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.AllowAny]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request):
-        if Profile.objects.filter(user=request.user).exists():
-            return success_response(message="Profile already exists", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-
-        serializer = ProfileSerializer(data=request.data)
+        serializer = ProfileCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save(user=request.user)
-        return success_response(message="Profile created successfully", data=serializer.data, status_code=status.HTTP_201_CREATED)
+        display_name = serializer.validated_data['display_name']
+        profile_picture = serializer.validated_data.get('profile_picture')
 
-#Profile detail view
-class ProfileDetailView(APIView):
+        with transaction.atomic():
+            profile_id = Profile.generate_unique_profile_id()
+            user = User.objects.create(
+                username=profile_id,
+                full_name=display_name
+            )
+            user.set_unusable_password()
+            user.save()
+
+            recovery_code = generate_recovery_code(profile_id)
+            recovery_code_hash = make_password(recovery_code)
+
+            profile = Profile.objects.create(
+                user=user,
+                profile_id=profile_id,
+                display_name=display_name,
+                profile_picture=profile_picture,
+                recovery_code_hash=recovery_code_hash,
+                recovery_code_created_at=timezone.now()
+            )
+
+            session = ProfileSession.create_session(user, request)
+
+        response_data = {
+            'success': True,
+            'message': 'Profile created successfully.',
+            'token': session.token,
+            'profile': ProfileDetailSerializer(profile).data,
+            'recovery_code': recovery_code,
+        }
+        response = Response(response_data, status=status.HTTP_201_CREATED)
+        set_session_cookie(response, session.token)
+        return response
+
+
+class ProfileRecoverView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        raw_code = (request.data.get('recovery_code') or '').strip().upper()
+        if not raw_code:
+            return Response(
+                {'success': False, 'message': 'Recovery code is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Expected format: REC-<suffix>-<part>
+        parts = raw_code.split('-')
+        if len(parts) != 3 or parts[0] != 'REC':
+            return Response(
+                {'success': False, 'message': 'Invalid recovery code format. Expected format: REC-XXXXX-XXXXXXXX'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        suffix = parts[1]
+        expected_profile_id = f"LYNQ-{suffix}"
+
+        try:
+            profile = Profile.objects.select_related('user').get(profile_id=expected_profile_id)
+        except Profile.DoesNotExist:
+            return Response(
+                {'success': False, 'message': 'Invalid recovery code.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not profile.recovery_code_hash or not check_password(raw_code, profile.recovery_code_hash):
+            return Response(
+                {'success': False, 'message': 'Invalid recovery code.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        with transaction.atomic():
+            # Rotate recovery code (single use!)
+            new_recovery_code = generate_recovery_code(profile.profile_id)
+            profile.recovery_code_hash = make_password(new_recovery_code)
+            profile.recovery_code_created_at = timezone.now()
+            profile.save(update_fields=['recovery_code_hash', 'recovery_code_created_at'])
+
+            session = ProfileSession.create_session(profile.user, request)
+
+        response_data = {
+            'success': True,
+            'message': 'Profile recovered successfully. A new recovery code has been generated.',
+            'token': session.token,
+            'profile': ProfileDetailSerializer(profile).data,
+            'new_recovery_code': new_recovery_code,
+        }
+        response = Response(response_data, status=status.HTTP_200_OK)
+        set_session_cookie(response, session.token)
+        return response
+
+
+class ProfileMeView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        try:
-            profile = Profile.objects.get(user=request.user)
-        except Profile.DoesNotExist:
-            return success_response(message="Profile not found", data=None, status_code=status.HTTP_404_NOT_FOUND)
+        profile = getattr(request.user, 'profile', None)
+        if not profile:
+            return Response(
+                {'success': False, 'message': 'Profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        return Response({
+            'success': True,
+            'profile': ProfileDetailSerializer(profile).data,
+        })
 
-        serializer = ProfileSerializer(profile)
-        return success_response(message="Profile fetched successfully", data=serializer.data, status_code=status.HTTP_200_OK)
 
-#profile update view
 class ProfileUpdateView(APIView):
     permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def put(self, request):
-        try:
-            profile = Profile.objects.get(user=request.user)
-        except Profile.DoesNotExist:
-            return success_response(message="Profile not found", data=None, status_code=status.HTTP_404_NOT_FOUND)
+        profile = getattr(request.user, 'profile', None)
+        if not profile:
+            return Response(
+                {'success': False, 'message': 'Profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
-        serializer = ProfileSerializer(profile, data=request.data, partial=True)
+        serializer = ProfileUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return success_response(message="Profile updated successfully", data=serializer.data, status_code=status.HTTP_200_OK)
 
-#interest list view
-class InterestListView(APIView):
+        if 'display_name' in serializer.validated_data:
+            new_name = serializer.validated_data['display_name']
+            profile.display_name = new_name
+            request.user.full_name = new_name
+            request.user.save(update_fields=['full_name'])
+
+        if 'profile_picture' in serializer.validated_data:
+            # Delete old image if new one provided
+            if profile.profile_picture:
+                profile.profile_picture.delete(save=False)
+            profile.profile_picture = serializer.validated_data['profile_picture']
+
+        profile.save()
+
+        return Response({
+            'success': True,
+            'message': 'Profile updated successfully.',
+            'profile': ProfileDetailSerializer(profile).data,
+        })
+
+
+class ProfileRegenerateRecoveryCodeView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        profile = getattr(request.user, 'profile', None)
+        if not profile:
+            return Response(
+                {'success': False, 'message': 'Profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        new_recovery_code = generate_recovery_code(profile.profile_id)
+        profile.recovery_code_hash = make_password(new_recovery_code)
+        profile.recovery_code_created_at = timezone.now()
+        profile.save(update_fields=['recovery_code_hash', 'recovery_code_created_at'])
+
+        return Response({
+            'success': True,
+            'message': 'New recovery code generated successfully. Keep it safe!',
+            'recovery_code': new_recovery_code,
+        })
+
+
+class ProfileLogoutView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        if hasattr(request, 'profile_session') and request.profile_session:
+            request.profile_session.is_active = False
+            request.profile_session.save(update_fields=['is_active'])
+
+        response = Response({'success': True, 'message': 'Logged out successfully.'})
+        clear_session_cookie(response)
+        return response
+
+
+# ============================================================================
+# PHASE 3 — CONNECTION REQUEST SYSTEM VIEWS
+# ============================================================================
+
+class ProfileSearchView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        interests = Interest.objects.all()
-        serializer = InterestSerializer(interests, many=True)
-        return success_response(message="Interests fetched successfully", data=serializer.data, status_code=status.HTTP_200_OK)
+        query = (request.query_params.get('profile_id') or '').strip().upper()
+        if not query:
+            return Response(
+                {'success': False, 'message': 'profile_id parameter is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-#connect request views
+        current_profile = getattr(request.user, 'profile', None)
+        if current_profile and current_profile.profile_id == query:
+            return Response(
+                {'success': False, 'message': 'You cannot search for your own profile ID.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        target_profile = Profile.objects.select_related('user').filter(profile_id=query).first()
+        if not target_profile:
+            return Response(
+                {'success': False, 'message': f"No profile found with ID '{query}'."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Check relationship status
+        req = ConnectRequest.objects.filter(
+            (models.Q(sender=request.user, receiver=target_profile.user) |
+             models.Q(sender=target_profile.user, receiver=request.user))
+        ).order_by('-created_at').first()
+
+        status_val = 'none'
+        request_id = None
+        conv_id = None
+
+        if req:
+            if req.status == 'accepted':
+                status_val = 'connected'
+                conv, _ = Conversation.get_or_create_between(request.user, target_profile.user)
+                conv_id = conv.id
+            elif req.status == 'pending':
+                if req.sender_id == request.user.id:
+                    status_val = 'pending_sent'
+                else:
+                    status_val = 'pending_received'
+                request_id = req.id
+
+        return Response({
+            'success': True,
+            'profile': ProfilePublicSerializer(target_profile).data,
+            'connection_status': status_val,
+            'request_id': request_id,
+            'conversation_id': conv_id,
+        })
+
+
 class SendConnectRequestView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        serializer = ConnectRequestSerializer(data=request.data, context={'request': request})
-        serializer.is_valid(raise_exception=True)
-        connect_request = serializer.save(sender=request.user)
+        target_id = (request.data.get('profile_id') or '').strip().upper()
+        reason = request.data.get('reason', 'be_friends')
 
-        # Push notification ayakkuka receiver-nu
-        send_push_notification(
-            user=connect_request.receiver,
-            title="New connection request",
-            body=f"{request.user.full_name or request.user.username} wants to connect with you.",
-            url="/requests"
-        )
+        if not target_id:
+            return Response(
+                {'success': False, 'message': 'profile_id is required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        return success_response(message="Connect request sent", data=serializer.data, status_code=status.HTTP_201_CREATED)
+        current_profile = getattr(request.user, 'profile', None)
+        if current_profile and current_profile.profile_id == target_id:
+            return Response(
+                {'success': False, 'message': 'You cannot send a connection request to yourself.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-#pending and sent requests views
-class PendingRequestsView(APIView):
+        target_profile = Profile.objects.select_related('user').filter(profile_id=target_id).first()
+        if not target_profile:
+            return Response(
+                {'success': False, 'message': 'Target profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        with transaction.atomic():
+            # Check existing connection
+            existing_req = ConnectRequest.objects.filter(
+                (models.Q(sender=request.user, receiver=target_profile.user) |
+                 models.Q(sender=target_profile.user, receiver=request.user))
+            ).order_by('-created_at').first()
+
+            if existing_req:
+                if existing_req.status == 'accepted':
+                    return Response(
+                        {'success': False, 'message': 'You are already connected with this profile.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                if existing_req.status == 'pending':
+                    if existing_req.sender_id == request.user.id:
+                        return Response(
+                            {'success': False, 'message': 'A connection request has already been sent.'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+                    else:
+                        # Auto-accept if they already sent a request
+                        existing_req.status = 'accepted'
+                        existing_req.save(update_fields=['status'])
+                        conv, _ = Conversation.get_or_create_between(request.user, target_profile.user)
+                        return Response({
+                            'success': True,
+                            'message': 'Connection request accepted automatically.',
+                            'connection_status': 'connected',
+                            'conversation_id': conv.id,
+                        })
+
+            connect_req = ConnectRequest.objects.create(
+                sender=request.user,
+                receiver=target_profile.user,
+                reason=reason,
+                status='pending'
+            )
+
+        # Notify receiver in real-time
+        channel_layer = get_channel_layer()
+        if channel_layer:
+            async_to_sync(channel_layer.group_send)(
+                f"user_{target_profile.user.id}",
+                {
+                    'type': 'connection_event',
+                    'event_type': 'incoming_connect_request',
+                    'data': ConnectRequestSerializer(connect_req).data,
+                }
+            )
+
+        return Response({
+            'success': True,
+            'message': 'Connection request sent successfully.',
+            'request': ConnectRequestSerializer(connect_req).data,
+        }, status=status.HTTP_201_CREATED)
+
+
+class IncomingRequestsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        requests_qs = ConnectRequest.objects.filter(receiver=request.user, status='pending')
-        serializer = ConnectRequestSerializer(requests_qs, many=True)
-        return success_response(message="Pending requests fetched", data=serializer.data, status_code=status.HTTP_200_OK)
+        requests = ConnectRequest.objects.filter(
+            receiver=request.user,
+            status='pending'
+        ).select_related('sender__profile', 'receiver__profile').order_by('-created_at')
+        return Response({
+            'success': True,
+            'requests': ConnectRequestSerializer(requests, many=True).data,
+        })
 
 
-class SentRequestsView(APIView):
+class OutgoingRequestsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        requests_qs = ConnectRequest.objects.filter(sender=request.user)
-        serializer = ConnectRequestSerializer(requests_qs, many=True)
-        return success_response(message="Sent requests fetched", data=serializer.data, status_code=status.HTTP_200_OK)
+        requests = ConnectRequest.objects.filter(
+            sender=request.user,
+            status='pending'
+        ).select_related('sender__profile', 'receiver__profile').order_by('-created_at')
+        return Response({
+            'success': True,
+            'requests': ConnectRequestSerializer(requests, many=True).data,
+        })
 
-#accept and decline connect request views
+
 class AcceptConnectRequestView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
-    def post(self, request):
-        request_id = request.data.get('request_id')
+    def post(self, request, request_id):
         try:
-            connect_request = ConnectRequest.objects.get(id=request_id, receiver=request.user, status='pending')
+            connect_req = ConnectRequest.objects.select_related('sender__profile', 'receiver__profile').get(
+                id=request_id,
+                receiver=request.user
+            )
         except ConnectRequest.DoesNotExist:
-            return success_response(message="Request not found or already handled.", data=None, status_code=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {'success': False, 'message': 'Connection request not found or unauthorized.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
-        connect_request.status = 'accepted'
-        connect_request.save()
+        if connect_req.status != 'pending':
+            return Response(
+                {'success': False, 'message': f'Request already {connect_req.status}.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        # Automatic aayi Conversation create cheyyuka (already illenkil mathram)
-        user_a = connect_request.sender
-        user_b = connect_request.receiver
+        with transaction.atomic():
+            connect_req.status = 'accepted'
+            connect_req.save(update_fields=['status'])
+            conv, _ = Conversation.get_or_create_between(connect_req.sender, connect_req.receiver)
 
-        conversation = Conversation.objects.filter(
-            models.Q(participant_1=user_a, participant_2=user_b) |
-            models.Q(participant_1=user_b, participant_2=user_a)
-        ).first()
+        # Notify sender in real time
+        channel_layer = get_channel_layer()
+        if channel_layer:
+            async_to_sync(channel_layer.group_send)(
+                f"user_{connect_req.sender_id}",
+                {
+                    'type': 'connection_event',
+                    'event_type': 'connect_request_accepted',
+                    'data': {
+                        'request_id': connect_req.id,
+                        'conversation_id': conv.id,
+                        'accepted_by': ProfilePublicSerializer(request.user.profile).data,
+                    }
+                }
+            )
 
-        if not conversation:
-            Conversation.objects.create(participant_1=user_a, participant_2=user_b)
+        return Response({
+            'success': True,
+            'message': 'Connection request accepted.',
+            'conversation_id': conv.id,
+        })
 
-        serializer = ConnectRequestSerializer(connect_request)
-        return success_response(message="Request accepted", data=serializer.data, status_code=status.HTTP_200_OK)
 
-#decline connect request view
 class DeclineConnectRequestView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
-    def post(self, request):
-        request_id = request.data.get('request_id')
+    def post(self, request, request_id):
         try:
-            connect_request = ConnectRequest.objects.get(id=request_id, receiver=request.user, status='pending')
+            connect_req = ConnectRequest.objects.get(
+                id=request_id,
+                receiver=request.user
+            )
         except ConnectRequest.DoesNotExist:
-            return success_response(message="Request not found or already handled.", data=None, status_code=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {'success': False, 'message': 'Connection request not found or unauthorized.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
 
-        connect_request.status = 'declined'
-        connect_request.save()
-        serializer = ConnectRequestSerializer(connect_request)
-        return success_response(message="Request declined", data=serializer.data, status_code=status.HTTP_200_OK)
+        connect_req.status = 'declined'
+        connect_req.save(update_fields=['status'])
 
-#suggestions view
-class SuggestionsView(APIView):
+        return Response({'success': True, 'message': 'Connection request declined.'})
+
+
+class CancelConnectRequestView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, request_id):
+        try:
+            connect_req = ConnectRequest.objects.get(
+                id=request_id,
+                sender=request.user
+            )
+        except ConnectRequest.DoesNotExist:
+            return Response(
+                {'success': False, 'message': 'Connection request not found or unauthorized.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        connect_req.status = 'cancelled'
+        connect_req.save(update_fields=['status'])
+
+        return Response({'success': True, 'message': 'Connection request cancelled.'})
+
+
+class ConnectedProfilesView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        try:
-            my_profile = Profile.objects.get(user=request.user)
-        except Profile.DoesNotExist:
-            return success_response(message="Please complete your profile first.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
+        # All users with whom current_user has accepted ConnectRequest
+        reqs = ConnectRequest.objects.filter(
+            (models.Q(sender=request.user) | models.Q(receiver=request.user)),
+            status='accepted'
+        ).select_related('sender__profile', 'receiver__profile')
 
-        
-        connected_or_pending_ids = ConnectRequest.objects.filter(
-            models.Q(sender=request.user) | models.Q(receiver=request.user),
-            status__in=['pending', 'accepted']
-        ).values_list('sender_id', 'receiver_id')
+        connections = []
+        seen_user_ids = set()
 
-        exclude_ids = {request.user.id}
-        for sender_id, receiver_id in connected_or_pending_ids:
-            exclude_ids.add(sender_id)
-            exclude_ids.add(receiver_id)
+        for req in reqs:
+            other_user = req.receiver if req.sender_id == request.user.id else req.sender
+            if other_user.id in seen_user_ids:
+                continue
+            seen_user_ids.add(other_user.id)
+            conv, _ = Conversation.get_or_create_between(request.user, other_user)
+            connections.append({
+                'profile': ProfilePublicSerializer(getattr(other_user, 'profile', None)).data,
+                'conversation_id': conv.id,
+                'connected_since': req.updated_at.isoformat(),
+            })
 
-        
-        suggestions = Profile.objects.exclude(user_id__in=exclude_ids)
+        return Response({'success': True, 'connections': connections})
 
-        serializer = ProfileSerializer(suggestions, many=True)
-        return success_response(message="Suggestions fetched successfully", data=serializer.data, status_code=status.HTTP_200_OK)
+
+# ============================================================================
+# PHASE 4 — REAL-TIME MESSAGING REST VIEWS
+# ============================================================================
 
 class ConversationListView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        conversations = Conversation.objects.filter(
+        convs = Conversation.objects.filter(
             models.Q(participant_1=request.user) | models.Q(participant_2=request.user)
-        ).order_by('-updated_at')
-        serializer = ConversationSerializer(conversations, many=True, context={'request': request})
-        return success_response(message="Conversations fetched successfully", data=serializer.data, status_code=status.HTTP_200_OK)
+        ).select_related(
+            'participant_1__profile', 'participant_2__profile'
+        ).prefetch_related('messages').order_by('-updated_at')
 
-#conversation detail view
+        serializer = ConversationSerializer(convs, many=True, context={'request': request})
+        return Response({'success': True, 'conversations': serializer.data})
+
+
 class ConversationDetailView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, conversation_id):
         try:
-            conversation = Conversation.objects.get(
-                models.Q(id=conversation_id),
-                models.Q(participant_1=request.user) | models.Q(participant_2=request.user)
-            )
+            conv = Conversation.objects.select_related(
+                'participant_1__profile', 'participant_2__profile'
+            ).get(id=conversation_id)
         except Conversation.DoesNotExist:
-            return success_response(message="Conversation not found.", data=None, status_code=status.HTTP_404_NOT_FOUND)
+            return Response({'success': False, 'message': 'Conversation not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        serializer = ConversationSerializer(conversation, context={'request': request})
-        return success_response(message="Conversation fetched successfully", data=serializer.data, status_code=status.HTTP_200_OK)
+        if conv.participant_1_id != request.user.id and conv.participant_2_id != request.user.id:
+            return Response({'success': False, 'message': 'Unauthorized.'}, status=status.HTTP_403_FORBIDDEN)
 
-#send message view
-#send message view
+        serializer = ConversationSerializer(conv, context={'request': request})
+        return Response({'success': True, 'conversation': serializer.data})
+
+
+class MessageListView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, conversation_id):
+        try:
+            conv = Conversation.objects.get(id=conversation_id)
+        except Conversation.DoesNotExist:
+            return Response({'success': False, 'message': 'Conversation not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if conv.participant_1_id != request.user.id and conv.participant_2_id != request.user.id:
+            return Response({'success': False, 'message': 'Unauthorized.'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Pagination params
+        limit = min(int(request.query_params.get('limit', 50)), 100)
+        before_id = request.query_params.get('before_id')
+        since_id = request.query_params.get('since_id')
+
+        qs = Message.objects.filter(conversation=conv).select_related('sender__profile')
+
+        if before_id:
+            qs = qs.filter(id__lt=int(before_id))
+        if since_id:
+            qs = qs.filter(id__gt=int(since_id))
+
+        messages = qs.order_by('-created_at')[:limit]
+        messages = list(reversed(messages))
+
+        # Mark messages as seen if unread
+        unread_ids = [m.id for m in messages if not m.is_read and m.sender_id != request.user.id]
+        if unread_ids:
+            Message.objects.filter(id__in=unread_ids).update(status='seen', is_read=True)
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    f"conv_{conv.id}",
+                    {
+                        'type': 'broadcast_messages_seen',
+                        'conversation_id': conv.id,
+                        'seen_by_profile_id': request.user.profile.profile_id,
+                    }
+                )
+
+        return Response({
+            'success': True,
+            'messages': MessageSerializer(messages, many=True).data,
+            'has_more': qs.filter(id__lt=messages[0].id).exists() if messages else False,
+        })
+
+
 class SendMessageView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
-    def post(self, request):
-        conversation_id = request.data.get('conversation_id')
-        content = request.data.get('content')
-        message_type = request.data.get('message_type', 'text')
-        audio_file = request.FILES.get('audio_file')
-        duration_seconds = request.data.get('duration_seconds')
-
-        # Rule: Conversation exist cheyyunnundo
+    def post(self, request, conversation_id):
         try:
-            conversation = Conversation.objects.get(id=conversation_id)
+            conv = Conversation.objects.select_related('participant_1', 'participant_2').get(id=conversation_id)
         except Conversation.DoesNotExist:
-            return success_response(message="Conversation not found.", data=None, status_code=status.HTTP_404_NOT_FOUND)
+            return Response({'success': False, 'message': 'Conversation not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Rule: Sender conversation-il participant aayirikkanam
-        if request.user != conversation.participant_1 and request.user != conversation.participant_2:
-            return success_response(message="You are not part of this conversation.", data=None, status_code=status.HTTP_403_FORBIDDEN)
+        if conv.participant_1_id != request.user.id and conv.participant_2_id != request.user.id:
+            return Response({'success': False, 'message': 'Unauthorized.'}, status=status.HTTP_403_FORBIDDEN)
 
-        if message_type == 'voice':
-            if not audio_file:
-                return success_response(message="Audio file is required for voice messages.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
+        other_user = conv.get_other_participant(request.user)
 
-            message = Message.objects.create(
-                conversation=conversation,
+        # Verify connection status
+        is_connected = ConnectRequest.objects.filter(
+            (models.Q(sender=request.user, receiver=other_user) | models.Q(sender=other_user, receiver=request.user)),
+            status='accepted'
+        ).exists()
+
+        if not is_connected:
+            return Response(
+                {'success': False, 'message': 'You can only message accepted connections.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        content = (request.data.get('content') or '').strip()
+        client_msg_id = request.data.get('client_message_id')
+
+        if not content:
+            return Response({'success': False, 'message': 'Message content cannot be empty.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Deduplication
+        if client_msg_id:
+            existing = Message.objects.filter(
+                conversation=conv,
                 sender=request.user,
-                message_type='voice',
-                audio_file=audio_file,
-                duration_seconds=duration_seconds or None
-            )
-        else:
-            # Rule: Empty text message reject cheyyuka
-            if not content or not content.strip():
-                return success_response(message="Message cannot be empty.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-
-            message = Message.objects.create(conversation=conversation, sender=request.user, content=content.strip(), message_type='text')
-
-        # Conversation-inte updated_at refresh cheyyuka (latest activity kaanikkaan)
-        conversation.save()
-
-        # Push notification ayakkuka receiver-nu
-        receiver = conversation.participant_1 if conversation.participant_2 == request.user else conversation.participant_2
-        notif_body = "🎤 Voice message" if message_type == 'voice' else content.strip()[:100]
-        send_push_notification(
-            user=receiver,
-            title=f"New message from {request.user.full_name or request.user.username}",
-            body=notif_body,
-            url=f"/chat/{conversation.id}"
-        )
-
-        serializer = MessageSerializer(message)
-        return success_response(message="Message sent", data=serializer.data, status_code=status.HTTP_201_CREATED)
-
-#get messages view
-class GetMessagesView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get(self, request, conversation_id):
-        try:
-            conversation = Conversation.objects.get(id=conversation_id)
-        except Conversation.DoesNotExist:
-            return success_response(message="Conversation not found.", data=None, status_code=status.HTTP_404_NOT_FOUND)
-
-        # Rule: User conversation-il participant aayirikkanam
-        if request.user != conversation.participant_1 and request.user != conversation.participant_2:
-            return success_response(message="You are not part of this conversation.", data=None, status_code=status.HTTP_403_FORBIDDEN)
-
-        # Read status update cheyyuka — current user allathe sender ayacha messages "read" aakkuka
-        Message.objects.filter(conversation=conversation, is_read=False).exclude(sender=request.user).update(is_read=True)
-
-        messages = conversation.messages.all()  # already ordered by created_at (oldest -> newest)
-        serializer = MessageSerializer(messages, many=True)
-        return success_response(message="Messages fetched successfully", data=serializer.data, status_code=status.HTTP_200_OK)
-
-
-class AdminLoginView(APIView):
-    permission_classes = [permissions.AllowAny]
-
-    def post(self, request):
-        serializer = LoginSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-
-        identifier = serializer.validated_data['identifier']
-        password = serializer.validated_data['password']
-
-        user_obj = User.objects.filter(email=identifier).first() or \
-                   User.objects.filter(username=identifier).first()
-
-        if user_obj is None:
-            return success_response(message="Invalid credentials", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-
-        user = authenticate(username=user_obj.username, password=password)
-
-        if user is None:
-            return success_response(message="Invalid credentials", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-        if user.is_banned:
-            return success_response(
-                message="Your account has been suspended. Please contact the system administrator.",
-                data=None,
-                status_code=status.HTTP_403_FORBIDDEN
-            )
-        # Admin check — mukhya rule
-        if not user.is_staff:
-            return success_response(message="You are not authorized to access the admin panel.", data=None, status_code=status.HTTP_403_FORBIDDEN)
-
-        token, _ = Token.objects.get_or_create(user=user)
-        return success_response(
-            message="Admin login successful",
-            data={
-                "token": token.key,
-                "username": user.username,
-                "full_name": user.full_name,
-                "is_staff": user.is_staff,
-                "is_superuser": user.is_superuser,
-            },
-            status_code=status.HTTP_200_OK
-        )
-
-
-class AdminDashboardStatsView(APIView):
-    permission_classes = [IsAdminUser]
-
-    def get(self, request):
-        today = timezone.now().date()
-
-        total_users = User.objects.count()
-        active_users = User.objects.filter(is_banned=False).count()
-        banned_users = User.objects.filter(is_banned=True).count()
-        new_users_today = User.objects.filter(created_at__date=today).count()
-
-        total_connections = ConnectRequest.objects.filter(status='accepted').count()
-        total_messages = Message.objects.count()
-
-        # Profile completion average
-        profiles = Profile.objects.all()
-        if profiles.exists():
-            total_percentage = sum(p.profile_completion['percentage'] for p in profiles)
-            avg_completion = round(total_percentage / profiles.count())
-        else:
-            avg_completion = 0
-
-        data = {
-            "total_users": total_users,
-            "active_users": active_users,
-            "banned_users": banned_users,
-            "new_users_today": new_users_today,
-            "total_connections": total_connections,
-            "total_messages": total_messages,
-            "reports": 0,  # Reports system inн venam, ippo placeholder
-            "avg_profile_completion": avg_completion,
-        }
-
-        return success_response(message="Dashboard stats fetched successfully", data=data, status_code=status.HTTP_200_OK)
-
-
-class AdminUserListView(APIView):
-    permission_classes = [IsAdminUser]
-
-    def get(self, request):
-        users = User.objects.all().order_by('-date_joined')
-
-        # Search
-        search = request.query_params.get('search')
-        if search:
-            users = users.filter(
-                models.Q(username__icontains=search) |
-                models.Q(email__icontains=search) |
-                models.Q(phone__icontains=search) |
-                models.Q(full_name__icontains=search)
-            )
-
-        # Filters
-        status_filter = request.query_params.get('status')
-        if status_filter == 'active':
-            users = users.filter(is_banned=False)
-        elif status_filter == 'banned':
-            users = users.filter(is_banned=True)
-
-        
-
-        serializer = AdminUserListSerializer(users, many=True)
-        return success_response(message="Users fetched successfully", data=serializer.data, status_code=status.HTTP_200_OK)
-
-
-class AdminUserBanView(APIView):
-    permission_classes = [IsAdminUser]
-
-    def post(self, request, user_id):
-        try:
-            user = User.objects.get(id=user_id)
-        except User.DoesNotExist:
-            return success_response(message="User not found.", data=None, status_code=status.HTTP_404_NOT_FOUND)
-
-        user.is_banned = True
-        user.save()
-        return success_response(message=f"{user.username} has been banned.", data=None, status_code=status.HTTP_200_OK)
-
-
-class AdminUserUnbanView(APIView):
-    permission_classes = [IsAdminUser]
-
-    def post(self, request, user_id):
-        try:
-            user = User.objects.get(id=user_id)
-        except User.DoesNotExist:
-            return success_response(message="User not found.", data=None, status_code=status.HTTP_404_NOT_FOUND)
-
-        user.is_banned = False
-        user.save()
-        return success_response(message=f"{user.username} has been unbanned.", data=None, status_code=status.HTTP_200_OK)
-
-
-class AdminUserDeleteView(APIView):
-    permission_classes = [IsAdminUser]
-
-    def delete(self, request, user_id):
-        try:
-            user = User.objects.get(id=user_id)
-        except User.DoesNotExist:
-            return success_response(message="User not found.", data=None, status_code=status.HTTP_404_NOT_FOUND)
-
-        username = user.username
-        user.delete()
-        return success_response(message=f"{username} has been deleted.", data=None, status_code=status.HTTP_200_OK)
-
-class NotificationCountView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get(self, request):
-        unread_messages = Message.objects.filter(
-            conversation__in=Conversation.objects.filter(
-                models.Q(participant_1=request.user) | models.Q(participant_2=request.user)
-            ),
-            is_read=False
-        ).exclude(sender=request.user).count()
-
-        pending_requests = ConnectRequest.objects.filter(receiver=request.user, status='pending').count()
-
-        data = {
-            "unread_messages": unread_messages,
-            "pending_requests": pending_requests,
-            "total": unread_messages + pending_requests
-        }
-        return success_response(message="Notification counts fetched", data=data, status_code=status.HTTP_200_OK)
-    
-
-class ForgotPasswordView(APIView):
-    permission_classes = [permissions.AllowAny]
-
-    def post(self, request):
-        email = request.data.get('email')
-        user = User.objects.filter(email=email).first()
-
-        if user:
-            PasswordResetToken.objects.filter(user=user, is_used=False).update(is_used=True)
-            reset_token = PasswordResetToken.objects.create(user=user)
-
-            reset_link = f"https://lynqoweb.website/reset-password?token={reset_token.token}"
-
-            try:
-                resend.api_key = django_settings.RESEND_API_KEY
-                resend.Emails.send({
-                    "from": "Lynqo <onboarding@lynqoweb.website>",
-                    "to": user.email,
-                    "subject": "Reset your Lynqo password",
-                    "html": f"<p>Hi {user.full_name or user.username},</p><p>Click the link below to reset your password:</p><p><a href='{reset_link}'>{reset_link}</a></p><p>This link expires in 30 minutes.</p>"
+                client_message_id=client_msg_id
+            ).first()
+            if existing:
+                return Response({
+                    'success': True,
+                    'message': MessageSerializer(existing).data,
+                    'deduplicated': True,
                 })
-            except Exception as e:
-                print(f"Failed to send reset email: {e}")
 
-        return success_response(
-            message="If this email is registered, a password reset link has been sent.",
-            data=None,
-            status_code=status.HTTP_200_OK
-        )
-
-
-class ResetPasswordView(APIView):
-    permission_classes = [permissions.AllowAny]
-
-    def post(self, request):
-        token_str = request.data.get('token')
-        new_password = request.data.get('new_password')
-
-        if not token_str or not new_password:
-            return success_response(message="Token and new password are required.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            reset_token = PasswordResetToken.objects.get(token=token_str)
-        except PasswordResetToken.DoesNotExist:
-            return success_response(message="Invalid reset link.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-
-        if not reset_token.is_valid():
-            return success_response(message="This reset link has expired or already been used.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-
-        user = reset_token.user
-        user.set_password(new_password)
-        user.save()
-
-        reset_token.is_used = True
-        reset_token.save()
-
-        return success_response(message="Password has been reset successfully.", data=None, status_code=status.HTTP_200_OK)
-    
-class PushSubscribeView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request):
-        endpoint = request.data.get('endpoint')
-        keys = request.data.get('keys', {})
-        p256dh = keys.get('p256dh')
-        auth = keys.get('auth')
-
-        if not endpoint or not p256dh or not auth:
-            return success_response(message="Invalid subscription data.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-
-        PushSubscription.objects.update_or_create(
-            user=request.user,
-            endpoint=endpoint,
-            defaults={'p256dh_key': p256dh, 'auth_key': auth}
-        )
-        return success_response(message="Subscribed to push notifications.", data=None, status_code=status.HTTP_201_CREATED)
-
-
-class PushUnsubscribeView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request):
-        endpoint = request.data.get('endpoint')
-        PushSubscription.objects.filter(user=request.user, endpoint=endpoint).delete()
-        return success_response(message="Unsubscribed from push notifications.", data=None, status_code=status.HTTP_200_OK)
-
-class OnlineStatusView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get(self, request, user_id):
-        try:
-            user = User.objects.get(id=user_id)
-        except User.DoesNotExist:
-            return success_response(message="User not found.", data=None, status_code=status.HTTP_404_NOT_FOUND)
-
-        is_online = False
-        if user.last_seen:
-            time_diff = timezone.now() - user.last_seen
-            is_online = time_diff.total_seconds() < 90  # 90 seconds il activity undenkil "online"
-
-        data = {
-            "user_id": user.id,
-            "is_online": is_online,
-            "last_seen": user.last_seen
-        }
-        return success_response(message="Online status fetched", data=data, status_code=status.HTTP_200_OK)
-
-
-class TypingIndicatorView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request):
-        conversation_id = request.data.get('conversation_id')
-        try:
-            conversation = Conversation.objects.get(id=conversation_id)
-        except Conversation.DoesNotExist:
-            return success_response(message="Conversation not found.", data=None, status_code=status.HTTP_404_NOT_FOUND)
-
-        if request.user != conversation.participant_1 and request.user != conversation.participant_2:
-            return success_response(message="You are not part of this conversation.", data=None, status_code=status.HTTP_403_FORBIDDEN)
-
-        TypingStatus.objects.update_or_create(
-            conversation=conversation,
-            user=request.user
-        )
-        return success_response(message="Typing status updated.", data=None, status_code=status.HTTP_200_OK)
-
-
-class TypingStatusView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get(self, request, conversation_id):
-        try:
-            conversation = Conversation.objects.get(id=conversation_id)
-        except Conversation.DoesNotExist:
-            return success_response(message="Conversation not found.", data=None, status_code=status.HTTP_404_NOT_FOUND)
-
-        other_user = conversation.participant_1 if conversation.participant_2 == request.user else conversation.participant_2
-
-        is_typing = False
-        typing_status = TypingStatus.objects.filter(conversation=conversation, user=other_user).first()
-        if typing_status:
-            time_diff = timezone.now() - typing_status.updated_at
-            is_typing = time_diff.total_seconds() < 4  # 4 seconds il signal undenkil "typing"
-
-        return success_response(message="Typing status fetched", data={"is_typing": is_typing}, status_code=status.HTTP_200_OK)
-
-class EditMessageView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def put(self, request, message_id):
-        try:
-            message = Message.objects.get(id=message_id)
-        except Message.DoesNotExist:
-            return success_response(message="Message not found.", data=None, status_code=status.HTTP_404_NOT_FOUND)
-
-        if message.sender != request.user:
-            return success_response(message="You can only edit your own messages.", data=None, status_code=status.HTTP_403_FORBIDDEN)
-
-        if message.is_deleted:
-            return success_response(message="Cannot edit a deleted message.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-
-        new_content = request.data.get('content')
-        if not new_content or not new_content.strip():
-            return success_response(message="Message cannot be empty.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-
-        message.content = new_content.strip()
-        message.is_edited = True
-        message.save()
-
-        serializer = MessageSerializer(message)
-        return success_response(message="Message edited.", data=serializer.data, status_code=status.HTTP_200_OK)
-
-
-class DeleteMessageView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def delete(self, request, message_id):
-        try:
-            message = Message.objects.get(id=message_id)
-        except Message.DoesNotExist:
-            return success_response(message="Message not found.", data=None, status_code=status.HTTP_404_NOT_FOUND)
-
-        if message.sender != request.user:
-            return success_response(message="You can only delete your own messages.", data=None, status_code=status.HTTP_403_FORBIDDEN)
-
-        message.is_deleted = True
-        message.content = ""
-        message.save()
-
-        serializer = MessageSerializer(message)
-        return success_response(message="Message deleted.", data=serializer.data, status_code=status.HTTP_200_OK)
-
-class VerifyEmailView(APIView):
-    permission_classes = [permissions.AllowAny]
-
-    def post(self, request):
-        user_id = request.data.get('user_id')
-        otp_code = request.data.get('otp_code')
-
-        try:
-            user = User.objects.get(id=user_id)
-        except User.DoesNotExist:
-            return success_response(message="User not found.", data=None, status_code=status.HTTP_404_NOT_FOUND)
-
-        if user.is_email_verified:
-            return success_response(message="Email already verified.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-
-        otp_obj = EmailOTP.objects.filter(user=user, otp_code=otp_code, is_used=False).order_by('-created_at').first()
-
-        if not otp_obj or not otp_obj.is_valid():
-            return success_response(message="Invalid or expired OTP.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-
-        otp_obj.is_used = True
-        otp_obj.save()
-
-        user.is_email_verified = True
-        user.save()
-
-        token, _ = Token.objects.get_or_create(user=user)
-        return success_response(
-            message="Email verified successfully.",
-            data={"token": token.key, "username": user.username},
-            status_code=status.HTTP_200_OK
-        )
-
-
-class ResendOTPView(APIView):
-    permission_classes = [permissions.AllowAny]
-
-    def post(self, request):
-        user_id = request.data.get('user_id')
-        try:
-            user = User.objects.get(id=user_id)
-        except User.DoesNotExist:
-            return success_response(message="User not found.", data=None, status_code=status.HTTP_404_NOT_FOUND)
-
-        if user.is_email_verified:
-            return success_response(message="Email already verified.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-
-        EmailOTP.objects.filter(user=user, is_used=False).update(is_used=True)
-        otp_code = generate_otp()
-        EmailOTP.objects.create(user=user, otp_code=otp_code)
-        send_otp_email(user, otp_code)
-
-        return success_response(message="A new verification code has been sent to your email.", data=None, status_code=status.HTTP_200_OK)
-
-class DeleteAccountView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
-
-    def post(self, request):
-        password = request.data.get('password')
-
-        if not password:
-            return success_response(message="Password is required to delete your account.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-
-        user = authenticate(username=request.user.username, password=password)
-        if user is None:
-            return success_response(message="Incorrect password.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-
-        username = request.user.username
-        request.user.delete()
-        return success_response(message=f"Account '{username}' has been permanently deleted.", data=None, status_code=status.HTTP_200_OK)
-
-
-class ContactUsView(APIView):
-    permission_classes = [permissions.AllowAny]
-
-    def post(self, request):
-        name = request.data.get('name')
-        email = request.data.get('email')
-        message = request.data.get('message')
-
-        if not name or not email or not message:
-            return success_response(message="Name, email, and message are required.", data=None, status_code=status.HTTP_400_BAD_REQUEST)
-
-        try:
-            resend.api_key = django_settings.RESEND_API_KEY
-            resend.Emails.send({
-                "from": "Lynqo <onboarding@lynqoweb.website>",
-                "to": "lynqoadmin111@gmail.com",
-                "subject": f"Lynqo Contact Form: {name}",
-                "html": f"<p><strong>From:</strong> {name} ({email})</p><p><strong>Message:</strong></p><p>{message}</p>"
-            })
-        except Exception as e:
-            print(f"Failed to send contact email: {e}")
-            return success_response(message="Failed to send message. Please try again later.", data=None, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        return success_response(message="Your message has been sent. We'll get back to you soon.", data=None, status_code=status.HTTP_200_OK)
+        with transaction.atomic():
+            msg = Message.objects.create(
+                conversation=conv,
+                sender=request.user,
+                content=content,
+                client_message_id=client_msg_id,
+                status='sent'
+            )
+            conv.updated_at = msg.created_at
+            conv.save(update_fields=['updated_at'])
+
+        msg_data = MessageSerializer(msg).data
+
+        # Broadcast via WebSocket
+        channel_layer = get_channel_layer()
+        if channel_layer:
+            async_to_sync(channel_layer.group_send)(
+                f"conv_{conv.id}",
+                {
+                    'type': 'broadcast_new_message',
+                    'message': msg_data,
+                }
+            )
+            async_to_sync(channel_layer.group_send)(
+                f"user_{other_user.id}",
+                {
+                    'type': 'broadcast_conversation_update',
+                    'conversation_id': conv.id,
+                    'message': msg_data,
+                }
+            )
+
+        return Response({
+            'success': True,
+            'message': msg_data,
+        }, status=status.HTTP_201_CREATED)

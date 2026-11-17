@@ -1,30 +1,12 @@
 import client from '../api/client';
 
-// Helper to convert object into FormData for file upload
-const buildProfileFormData = (data) => {
-  const formData = new FormData();
-  
-  Object.keys(data).forEach((key) => {
-    if (key === 'profile_picture') {
-      // Only append if it's a File object (user selected a new file)
-      if (data[key] instanceof File) {
-        formData.append('profile_picture', data[key]);
-      }
-    } else if (data[key] !== undefined && data[key] !== null) {
-      formData.append(key, data[key]);
-    }
-  });
-  
-  return formData;
-};
-
 export const profileService = {
-  async getProfileDetail() {
-    return client.get('/api/auth/profile/');
-  },
-
-  async createProfile(profileData) {
-    const formData = buildProfileFormData(profileData);
+  async createProfile(displayName, profilePictureFile) {
+    const formData = new FormData();
+    formData.append('display_name', displayName);
+    if (profilePictureFile instanceof File) {
+      formData.append('profile_picture', profilePictureFile);
+    }
     return client.post('/api/auth/profile/create/', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
@@ -32,8 +14,24 @@ export const profileService = {
     });
   },
 
-  async updateProfile(profileData) {
-    const formData = buildProfileFormData(profileData);
+  async recoverProfile(recoveryCode) {
+    return client.post('/api/auth/profile/recover/', {
+      recovery_code: recoveryCode,
+    });
+  },
+
+  async getProfile() {
+    return client.get('/api/auth/profile/me/');
+  },
+
+  async updateProfile({ displayName, profilePictureFile }) {
+    const formData = new FormData();
+    if (displayName) {
+      formData.append('display_name', displayName);
+    }
+    if (profilePictureFile instanceof File) {
+      formData.append('profile_picture', profilePictureFile);
+    }
     return client.put('/api/auth/profile/update/', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
@@ -41,8 +39,13 @@ export const profileService = {
     });
   },
 
-  async getSuggestions() {
-    return client.get('/api/auth/suggestions/');
+  async regenerateRecoveryCode() {
+    return client.post('/api/auth/profile/regenerate-recovery-code/');
+  },
+
+  async logout() {
+    return client.post('/api/auth/profile/logout/');
   },
 };
+
 export default profileService;

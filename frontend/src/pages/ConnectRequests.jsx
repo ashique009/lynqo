@@ -1,229 +1,258 @@
 import React, { useState, useEffect } from 'react';
-import { useToast } from '../context/ToastContext';
+import { useNavigate } from 'react-router-dom';
+import { UserCheck, UserX, Clock, ArrowUpRight, ArrowDownLeft, Check, X, MessageSquare } from 'lucide-react';
 import { connectService } from '../services/connectService';
+import { wsService } from '../services/websocketService';
+import { useToast } from '../context/ToastContext';
 import Loader from '../components/Loader';
-import EmptyState from '../components/EmptyState';
-import { Check, X, Clock, Send, ArrowRight, UserPlus, FileText } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
 
 export const ConnectRequests = () => {
-  const [activeTab, setActiveTab] = useState('received'); // 'received' | 'sent'
-  const [receivedRequests, setReceivedRequests] = useState([]);
-  const [sentRequests, setSentRequests] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [actionLoadingId, setActionLoadingId] = useState(null);
+  const [activeTab, setActiveTab] = useState('incoming');
+  const [incoming, setIncoming] = useState([]);
+  const [outgoing, setOutgoing] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [processingId, setProcessingId] = useState(null);
+
   const { showToast } = useToast();
+  const navigate = useNavigate();
 
   const fetchRequests = async () => {
-    setLoading(true);
+    setIsLoading(true);
     try {
-      const [receivedRes, sentRes] = await Promise.all([
-        connectService.getPendingRequests(),
-        connectService.getSentRequests(),
+      const [inRes, outRes] = await Promise.all([
+        connectService.getIncomingRequests(),
+        connectService.getOutgoingRequests(),
       ]);
-
-      if (receivedRes.success) setReceivedRequests(receivedRes.data);
-      if (sentRes.success) setSentRequests(sentRes.data);
+      if (inRes.success) setIncoming(inRes.requests || []);
+      if (outRes.success) setOutgoing(outRes.requests || []);
     } catch (err) {
-      showToast('Failed to fetch connection requests.', 'error');
+      console.error('Error fetching requests:', err);
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
   };
 
   useEffect(() => {
     fetchRequests();
+
+    // Listen for real-time connection events
+    const unsub = wsService.on('connection_event', (event) => {
+      fetchRequests();
+    });
+
+    return () => unsub();
   }, []);
 
-  const handleAccept = async (requestId, senderName) => {
-    setActionLoadingId(requestId);
+  const handleAccept = async (requestId) => {
+    setProcessingId(requestId);
     try {
-      const response = await connectService.acceptRequest(requestId);
-      if (response.success) {
-        showToast(`Matched with ${senderName}! Conversation opened.`, 'success');
-        setReceivedRequests((prev) => prev.filter((r) => r.id !== requestId));
+      const res = await connectService.acceptRequest(requestId);
+      if (res.success) {
+        showToast('Connection accepted!', 'success');
+        setIncoming((prev) => prev.filter((r) => r.id !== requestId));
+        if (res.conversation_id) {
+          navigate(`/chat/${res.conversation_id}`);
+        }
       } else {
-        showToast(response.message || 'Failed to accept invitation.', 'error');
+        showToast(res.message || 'Failed to accept request.', 'error');
       }
     } catch (err) {
-      showToast(err.message || 'An error occurred.', 'error');
+      showToast(err.message || 'Error accepting request.', 'error');
     } finally {
-      setActionLoadingId(null);
+      setProcessingId(null);
     }
   };
 
-  const handleDecline = async (requestId, senderName) => {
-    setActionLoadingId(requestId);
+  const handleDecline = async (requestId) => {
+    setProcessingId(requestId);
     try {
-      const response = await connectService.declineRequest(requestId);
-      if (response.success) {
-        showToast(`Declined invitation from ${senderName}.`, 'info');
-        setReceivedRequests((prev) => prev.filter((r) => r.id !== requestId));
-      } else {
-        showToast(response.message || 'Failed to decline invitation.', 'error');
+      const res = await connectService.declineRequest(requestId);
+      if (res.success) {
+        showToast('Connection request declined.', 'info');
+        setIncoming((prev) => prev.filter((r) => r.id !== requestId));
       }
     } catch (err) {
-      showToast(err.message || 'An error occurred.', 'error');
+      showToast(err.message || 'Error declining request.', 'error');
     } finally {
-      setActionLoadingId(null);
+      setProcessingId(null);
     }
   };
 
-  const getStatusBadge = (status) => {
-    switch (status) {
-      case 'pending':
-        return (
-          <span className="inline-flex items-center gap-1 text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
-            <Clock className="w-2.5 h-2.5" />
-            <span>Pending</span>
-          </span>
-        );
-      case 'accepted':
-        return (
-          <span className="inline-flex items-center gap-1 text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-            <Check className="w-2.5 h-2.5" />
-            <span>Accepted</span>
-          </span>
-        );
-      case 'declined':
-        return (
-          <span className="inline-flex items-center gap-1 text-[9px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/20">
-            <X className="w-2.5 h-2.5" />
-            <span>Declined</span>
-          </span>
-        );
-      default:
-        return null;
+  const handleCancel = async (requestId) => {
+    setProcessingId(requestId);
+    try {
+      const res = await connectService.cancelRequest(requestId);
+      if (res.success) {
+        showToast('Connection request cancelled.', 'info');
+        setOutgoing((prev) => prev.filter((r) => r.id !== requestId));
+      }
+    } catch (err) {
+      showToast(err.message || 'Error cancelling request.', 'error');
+    } finally {
+      setProcessingId(null);
     }
   };
-
-  if (loading) {
-    return <Loader />;
-  }
-
-  const currentList = activeTab === 'received' ? receivedRequests : sentRequests;
 
   return (
-    <div className="space-y-6 text-left">
-      <div>
-        <h2 className="text-2xl font-extrabold font-display text-[#2C2C2A] dark:text-slate-100">Connect Invites</h2>
-        <p className="text-[#5F5E5A] dark:text-slate-400 text-xs mt-1">
-          Approve incoming connection notes to open secure dialogue chat lines.
-        </p>
+    <div className="space-y-6 max-w-4xl mx-auto">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Connection Requests</h1>
+          <p className="text-sm text-slate-400">Manage your pending incoming and outgoing connection invitations</p>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex p-1 rounded-2xl bg-slate-900 border border-slate-800 self-start sm:self-auto">
+          <button
+            onClick={() => setActiveTab('incoming')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+              activeTab === 'incoming'
+                ? 'bg-pink-500 text-white shadow-md shadow-pink-500/20'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <ArrowDownLeft className="w-3.5 h-3.5" />
+            <span>Incoming</span>
+            {incoming.length > 0 && (
+              <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${activeTab === 'incoming' ? 'bg-white text-pink-500' : 'bg-pink-500 text-white'}`}>
+                {incoming.length}
+              </span>
+            )}
+          </button>
+          <button
+            onClick={() => setActiveTab('outgoing')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+              activeTab === 'outgoing'
+                ? 'bg-pink-500 text-white shadow-md shadow-pink-500/20'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <ArrowUpRight className="w-3.5 h-3.5" />
+            <span>Outgoing</span>
+            {outgoing.length > 0 && (
+              <span className={`px-1.5 py-0.5 rounded-full text-[10px] ${activeTab === 'outgoing' ? 'bg-white text-pink-500' : 'bg-slate-800 text-slate-300'}`}>
+                {outgoing.length}
+              </span>
+            )}
+          </button>
+        </div>
       </div>
 
-      {/* Tabs */}
-      <div className="flex border-b border-[#F4C0D1] dark:border-slate-900 pb-px gap-1">
-        <button
-          onClick={() => setActiveTab('received')}
-          className={`px-4 py-2.5 text-xs font-extrabold uppercase tracking-wider border-b-2 transition-all cursor-pointer ${
-            activeTab === 'received'
-              ? 'border-[#D4537E] text-[#D4537E] dark:border-brand-purple dark:text-brand-purple-light'
-              : 'border-transparent text-[#5F5E5A] dark:text-slate-400 hover:text-[#2C2C2A] dark:hover:text-slate-200'
-          }`}
-        >
-          Received ({receivedRequests.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('sent')}
-          className={`px-4 py-2.5 text-xs font-extrabold uppercase tracking-wider border-b-2 transition-all cursor-pointer ${
-            activeTab === 'sent'
-              ? 'border-[#D4537E] text-[#D4537E] dark:border-brand-purple dark:text-brand-purple-light'
-              : 'border-transparent text-[#5F5E5A] dark:text-slate-400 hover:text-[#2C2C2A] dark:hover:text-slate-200'
-          }`}
-        >
-          Sent ({sentRequests.length})
-        </button>
-      </div>
-
-      {/* Content */}
-      <div className="space-y-4">
-        {currentList.length === 0 ? (
-          <EmptyState
-            icon={activeTab === 'received' ? UserPlus : Send}
-            title={activeTab === 'received' ? 'No Received Invites' : 'No Sent Invites'}
-            description={
-              activeTab === 'received'
-                ? 'Your request inbox is empty right now. Once users invite you, they will appear here.'
-                : 'You have not sent any connect invitations yet. Browse matching suggestion profiles to invite them.'
-            }
-            actionText={activeTab === 'sent' ? 'Find Matches' : null}
-            actionLink={activeTab === 'sent' ? '/suggestions' : null}
-          />
+      {isLoading ? (
+        <div className="py-16 flex justify-center">
+          <Loader />
+        </div>
+      ) : activeTab === 'incoming' ? (
+        /* Incoming List */
+        incoming.length === 0 ? (
+          <div className="py-16 text-center rounded-3xl bg-slate-900/40 border border-slate-800/60 p-8 space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-slate-800/80 text-slate-500 flex items-center justify-center mx-auto">
+              <UserCheck className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-semibold text-slate-300">No incoming connection requests</h3>
+            <p className="text-xs text-slate-500 max-w-sm mx-auto">
+              When someone searches for your Profile ID and sends a request, it will appear here.
+            </p>
+          </div>
         ) : (
-          <div className="flex flex-col gap-3">
-            <AnimatePresence mode="popLayout">
-              {currentList.map((req) => (
-                <motion.div
-                  layout
-                  key={req.id}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  className="glass-panel p-4 rounded-xl border border-[#F4C0D1] dark:border-brand-purple/10 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white dark:bg-brand-dark/15 hover:border-[#D4537E]/30 dark:hover:border-brand-purple/20 transition-all duration-200"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-[#D4537E]/15 dark:bg-brand-purple/10 flex items-center justify-center border border-[#D4537E]/30 dark:border-brand-purple/20 text-[#D4537E] dark:text-brand-purple-light text-xs font-extrabold uppercase flex-shrink-0">
-                      {activeTab === 'received' 
-                        ? req.sender_username.substring(0, 2)
-                        : req.receiver_username.substring(0, 2)}
-                    </div>
-                    
-                    <div>
-                      <div className="text-sm font-bold text-[#2C2C2A] dark:text-slate-200">
-                        {activeTab === 'received' ? (
-                          <span>Invitation from <strong className="text-[#D4537E] dark:text-brand-purple-light font-bold">@{req.sender_username}</strong></span>
-                        ) : (
-                          <span>Invitation to <strong className="text-indigo-600 dark:text-indigo-400 font-bold">@{req.receiver_username}</strong></span>
-                        )}
-                      </div>
-                      
-                      <div className="flex items-center gap-1.5 mt-1.5 text-xs text-[#5F5E5A] dark:text-slate-400 font-medium">
-                        <FileText className="w-3.5 h-3.5 text-[#5F5E5A] dark:text-slate-500" />
-                        <span>Note: "{req.reason_display}"</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Actions */}
-                  <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-                    {activeTab === 'received' ? (
-                      <>
-                        <button
-                          onClick={() => handleDecline(req.id, req.sender_username)}
-                          disabled={actionLoadingId !== null}
-                          className="p-2.5 rounded-xl border border-[#F4C0D1] dark:border-slate-800 text-[#5F5E5A] dark:text-slate-400 hover:text-rose-500 dark:hover:text-rose-400 hover:bg-rose-500/5 transition-all cursor-pointer flex items-center justify-center"
-                          title="Decline"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={() => handleAccept(req.id, req.sender_username)}
-                          disabled={actionLoadingId !== null}
-                          className="px-4 py-2 rounded-xl bg-[#D4537E] hover:bg-[#c2436d] dark:bg-brand-purple dark:hover:bg-brand-purple-dark text-white border border-transparent dark:border-brand-purple-light/20 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-md shadow-[#D4537E]/10 dark:shadow-brand-purple/10"
-                        >
-                          {actionLoadingId === req.id ? (
-                            <div className="w-3.5 h-3.5 rounded-full border-2 border-white/20 border-t-white animate-spin"></div>
-                          ) : (
-                            <>
-                              <Check className="w-3.5 h-3.5" />
-                              <span>Accept</span>
-                            </>
-                          )}
-                        </button>
-                      </>
+          <div className="grid gap-3">
+            {incoming.map((req) => (
+              <div
+                key={req.id}
+                className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 backdrop-blur-sm"
+              >
+                <div className="flex items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-xl overflow-hidden bg-slate-800 border border-slate-700 shrink-0">
+                    {req.sender?.profile_picture ? (
+                      <img src={req.sender.profile_picture} alt="" className="w-full h-full object-cover" />
                     ) : (
-                      <div className="flex items-center gap-3">
-                        {getStatusBadge(req.status)}
+                      <div className="w-full h-full flex items-center justify-center font-bold text-pink-400 bg-pink-500/10">
+                        {req.sender?.display_name?.charAt(0) || 'U'}
                       </div>
                     )}
                   </div>
-                </motion.div>
-              ))}
-            </AnimatePresence>
+                  <div>
+                    <h4 className="font-bold text-sm text-white">{req.sender?.display_name}</h4>
+                    <span className="font-mono text-xs text-pink-400 font-semibold">{req.sender?.profile_id}</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                  <button
+                    onClick={() => handleDecline(req.id)}
+                    disabled={processingId === req.id}
+                    className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <X className="w-4 h-4" />
+                    <span>Decline</span>
+                  </button>
+                  <button
+                    onClick={() => handleAccept(req.id)}
+                    disabled={processingId === req.id}
+                    className="px-5 py-2 rounded-xl bg-pink-500 hover:bg-pink-600 text-white text-xs font-bold transition-colors shadow-md shadow-pink-500/20 flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Check className="w-4 h-4" />
+                    <span>Accept</span>
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
-        )}
-      </div>
+        )
+      ) : (
+        /* Outgoing List */
+        outgoing.length === 0 ? (
+          <div className="py-16 text-center rounded-3xl bg-slate-900/40 border border-slate-800/60 p-8 space-y-3">
+            <div className="w-12 h-12 rounded-2xl bg-slate-800/80 text-slate-500 flex items-center justify-center mx-auto">
+              <Clock className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-semibold text-slate-300">No pending sent requests</h3>
+            <p className="text-xs text-slate-500 max-w-sm mx-auto">
+              Requests you send to others that haven't been accepted yet will appear here.
+            </p>
+          </div>
+        ) : (
+          <div className="grid gap-3">
+            {outgoing.map((req) => (
+              <div
+                key={req.id}
+                className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 backdrop-blur-sm"
+              >
+                <div className="flex items-center gap-3.5">
+                  <div className="w-12 h-12 rounded-xl overflow-hidden bg-slate-800 border border-slate-700 shrink-0">
+                    {req.receiver?.profile_picture ? (
+                      <img src={req.receiver.profile_picture} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center font-bold text-indigo-400 bg-indigo-500/10">
+                        {req.receiver?.display_name?.charAt(0) || 'U'}
+                      </div>
+                    )}
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-sm text-white">{req.receiver?.display_name}</h4>
+                    <span className="font-mono text-xs text-indigo-400 font-semibold">{req.receiver?.profile_id}</span>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+                  <span className="text-xs text-amber-400 flex items-center gap-1">
+                    <Clock className="w-3.5 h-3.5" />
+                    Pending
+                  </span>
+                  <button
+                    onClick={() => handleCancel(req.id)}
+                    disabled={processingId === req.id}
+                    className="px-3.5 py-1.5 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-slate-300 hover:text-rose-400 text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )
+      )}
     </div>
   );
 };

@@ -9,48 +9,21 @@ export const chatService = {
     return client.get(`/api/auth/conversations/${conversationId}/`);
   },
 
-  async getMessages(conversationId) {
-    return client.get(`/api/auth/messages/${conversationId}/`);
+  async getMessages(conversationId, params = {}) {
+    const query = new URLSearchParams();
+    if (params.limit) query.append('limit', params.limit);
+    if (params.before_id) query.append('before_id', params.before_id);
+    if (params.since_id) query.append('since_id', params.since_id);
+    const qs = query.toString() ? `?${query.toString()}` : '';
+    return client.get(`/api/auth/conversations/${conversationId}/messages/${qs}`);
   },
 
-  async sendMessage(conversationId, content) {
-    return client.post('/api/auth/messages/send/', {
-      conversation_id: conversationId,
-      content: content,
+  async sendMessage(conversationId, content, clientMessageId = null) {
+    return client.post(`/api/auth/conversations/${conversationId}/messages/send/`, {
+      content,
+      client_message_id: clientMessageId || `web-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
     });
-  },
-
-  async sendVoiceMessage(conversationId, audioFile, durationSeconds) {
-    const formData = new FormData();
-    formData.append('conversation_id', conversationId);
-    formData.append('message_type', 'voice');
-    formData.append('audio_file', audioFile);
-    formData.append('duration_seconds', Math.round(durationSeconds));
-    return client.post('/api/auth/messages/send/', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-    });
-  },
-
-  async sendTypingSignal(conversationId) {
-    return client.post('/api/auth/messages/typing/', {
-      conversation_id: conversationId,
-    });
-  },
-
-  async getTypingStatus(conversationId) {
-    return client.get(`/api/auth/messages/typing-status/${conversationId}/`);
-  },
-
-  async editMessage(messageId, content) {
-    return client.put(`/api/auth/messages/${messageId}/edit/`, {
-      content: content,
-    });
-  },
-
-  async deleteMessage(messageId) {
-    return client.delete(`/api/auth/messages/${messageId}/delete/`);
   },
 };
+
 export default chatService;

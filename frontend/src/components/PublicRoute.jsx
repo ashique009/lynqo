@@ -4,16 +4,13 @@ import { useAuth } from '../context/AuthContext';
 import Loader from './Loader';
 
 export const PublicRoute = ({ children }) => {
-  const { token, isLoading, hasProfile } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
 
   if (isLoading) {
     return <Loader fullScreen={true} />;
   }
 
-  if (token) {
-    if (!hasProfile) {
-      return <Navigate to="/profile-setup" replace />;
-    }
+  if (isAuthenticated) {
     return <Navigate to="/dashboard" replace />;
   }
 

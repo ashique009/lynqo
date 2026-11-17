@@ -1,753 +1,403 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { chatService } from '../services/chatService';
-import { authService } from '../services/authService';
-import { formatRelativeTime } from '../utils/timeUtils';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import {
+  ArrowLeft, Send, Check, CheckCheck, Clock,
+  ChevronDown, WifiOff, AlertCircle
+} from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
+import { chatService } from '../services/chatService';
+import { wsService } from '../services/websocketService';
 import Loader from '../components/Loader';
-import Modal from '../components/Modal';
-import { Send, ArrowLeft, User, MoreVertical, Pencil, Trash2, Check, X, Ban, AlertTriangle, Mic, Square, ChevronUp, ChevronLeft } from 'lucide-react';
-import VoiceMessagePlayer from '../components/VoiceMessagePlayer';
 
 export const Chat = () => {
   const { conversationId } = useParams();
-  const { username } = useAuth();
+  const { profile } = useAuth();
   const { showToast } = useToast();
+  const navigate = useNavigate();
 
   const [conversation, setConversation] = useState(null);
   const [messages, setMessages] = useState([]);
-  const [newMessage, setNewMessage] = useState('');
-  const [onlineStatus, setOnlineStatus] = useState(null);
-  const [isPartnerTyping, setIsPartnerTyping] = useState(false);
-  
-  const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
-
-  const [editingMessageId, setEditingMessageId] = useState(null);
-  const [editContent, setEditContent] = useState('');
-  const [isEditingSaving, setIsEditingSaving] = useState(false);
-  const [activeMenuMessageId, setActiveMenuMessageId] = useState(null);
-  const [deletingMessageId, setDeletingMessageId] = useState(null);
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
-
-  // Voice message states
-  const [recordingState, setRecordingState] = useState('idle'); // 'idle' | 'recording' | 'locked' | 'review'
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
-  const [dragDeltaX, setDragDeltaX] = useState(0);
-  const [dragDeltaY, setDragDeltaY] = useState(0);
-  const [reviewAudioUrl, setReviewAudioUrl] = useState(null);
-  const [reviewAudioBlob, setReviewAudioBlob] = useState(null);
-  const [reviewDuration, setReviewDuration] = useState(0);
-
-  // Voice message refs
-  const mediaRecorderRef = useRef(null);
-  const audioChunksRef = useRef([]);
-  const recordingTimerIntervalRef = useRef(null);
-  const dragStartRef = useRef({ x: 0, y: 0 });
-  const pointerIdRef = useRef(null);
-  const isDragCancelledRef = useRef(false);
-  const isDragLockedRef = useRef(false);
-  const isReviewModeRef = useRef(false);
+  const [inputText, setInputText] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [isTyping, setIsTyping] = useState(false);
+  const [otherUserTyping, setOtherUserTyping] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [isWsConnected, setIsWsConnected] = useState(wsService.isConnected);
+  const [showScrollBottom, setShowScrollBottom] = useState(false);
 
   const messagesEndRef = useRef(null);
-  const pollingTimerRef = useRef(null);
-  const statusTimerRef = useRef(null);
-  const typingStatusTimerRef = useRef(null);
-  const lastTypingSentRef = useRef(0);
+  const chatContainerRef = useRef(null);
+  const typingTimeoutRef = useRef(null);
+  const otherTypingTimeoutRef = useRef(null);
+  const isNearBottomRef = useRef(true);
+
+  // 1. Load initial conversation details and message history
+  const loadInitialData = async () => {
+    setIsLoading(true);
+    try {
+      const [convRes, msgRes] = await Promise.all([
+        chatService.getConversationDetail(conversationId),
+        chatService.getMessages(conversationId, { limit: 50 }),
+      ]);
+
+      if (convRes.success) {
+        setConversation(convRes.conversation);
+      }
+      if (msgRes.success) {
+        setMessages(msgRes.messages || []);
+        setHasMore(msgRes.has_more);
+      }
+    } catch (err) {
+      showToast(err.message || 'Failed to load conversation.', 'error');
+    } finally {
+      setIsLoading(false);
+      setTimeout(scrollToBottom, 100);
+    }
+  };
 
   useEffect(() => {
-    const handleClickOutside = () => {
-      setActiveMenuMessageId(null);
-    };
-    document.addEventListener('click', handleClickOutside);
-    return () => {
-      document.removeEventListener('click', handleClickOutside);
-    };
-  }, []);
+    loadInitialData();
 
-  const fetchOnlineStatus = async (partnerId) => {
-    if (!partnerId) return;
-    try {
-      const res = await authService.getOnlineStatus(partnerId);
-      if (res && res.success && res.data) {
-        setOnlineStatus(res.data);
+    // Join conversation room via WebSocket
+    wsService.joinConversation(conversationId);
+
+    // Listen for WebSocket connection status
+    const unsubStatus = wsService.on('connection_status', (data) => {
+      setIsWsConnected(data.isConnected);
+      if (data.isConnected) {
+        // Sync any missed messages after reconnect
+        syncMissedMessages();
       }
-    } catch (err) {
-      // Ignore background status polling errors
-    }
-  };
+    });
 
-  const fetchChatDetails = async (isPoll = false) => {
-    try {
-      // Get messages
-      const msgResponse = await chatService.getMessages(conversationId);
-      if (msgResponse.success && msgResponse.data) {
-        // Prevent layout jerk if length is identical
+    // Listen for incoming messages
+    const unsubMsg = wsService.on('new_message', (data) => {
+      const incomingMsg = data.message;
+      if (String(incomingMsg.conversation_id) === String(conversationId)) {
         setMessages((prev) => {
-          if (JSON.stringify(prev) !== JSON.stringify(msgResponse.data)) {
-            return msgResponse.data;
+          // Check if already in list (optimistic or duplicate)
+          const idx = prev.findIndex(
+            (m) => (m.client_message_id && m.client_message_id === incomingMsg.client_message_id) || m.id === incomingMsg.id
+          );
+          if (idx !== -1) {
+            const copy = [...prev];
+            copy[idx] = incomingMsg;
+            return copy;
           }
-          return prev;
+          return [...prev, incomingMsg];
         });
-      }
 
-      // Only fetch conversation details once or on demand
-      if (!isPoll) {
-        const convoResponse = await chatService.getConversationDetail(conversationId);
-        if (convoResponse.success && convoResponse.data) {
-          setConversation(convoResponse.data);
+        // If message is from other user and we are looking at chat, mark seen
+        if (incomingMsg.sender_profile_id !== profile?.profile_id) {
+          wsService.markSeen(conversationId);
+        }
+
+        // Auto-scroll if user is near bottom
+        if (isNearBottomRef.current) {
+          setTimeout(scrollToBottom, 50);
+        } else {
+          setShowScrollBottom(true);
         }
       }
-    } catch (err) {
-      if (!isPoll) {
-        showToast('Failed to load chat details.', 'error');
+    });
+
+    // Listen for message ACK
+    const unsubAck = wsService.on('message_ack', (data) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.client_message_id === data.client_message_id) {
+            return { ...m, id: data.message_id, status: data.status };
+          }
+          return m;
+        })
+      );
+    });
+
+    // Listen for typing indicator
+    const unsubTyping = wsService.on('typing_indicator', (data) => {
+      if (String(data.conversation_id) === String(conversationId)) {
+        setOtherUserTyping(data.is_typing);
+        if (otherTypingTimeoutRef.current) clearTimeout(otherTypingTimeoutRef.current);
+        if (data.is_typing) {
+          otherTypingTimeoutRef.current = setTimeout(() => {
+            setOtherUserTyping(false);
+          }, 3000);
+        }
       }
-    } finally {
-      if (!isPoll) {
-        setLoading(false);
+    });
+
+    // Listen for messages seen
+    const unsubSeen = wsService.on('messages_seen', (data) => {
+      if (String(data.conversation_id) === String(conversationId)) {
+        setMessages((prev) =>
+          prev.map((m) => (m.sender_profile_id === profile?.profile_id ? { ...m, status: 'seen' } : m))
+        );
       }
+    });
+
+    // Listen for presence changes
+    const unsubPresence = wsService.on('presence_update', (data) => {
+      setConversation((prev) => {
+        if (!prev || prev.other_participant?.profile_id !== data.profile_id) return prev;
+        return {
+          ...prev,
+          other_participant: {
+            ...prev.other_participant,
+            is_online: data.is_online,
+            last_seen: data.last_seen,
+          },
+        };
+      });
+    });
+
+    return () => {
+      wsService.leaveConversation(conversationId);
+      unsubStatus();
+      unsubMsg();
+      unsubAck();
+      unsubTyping();
+      unsubSeen();
+      unsubPresence();
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      if (otherTypingTimeoutRef.current) clearTimeout(otherTypingTimeoutRef.current);
+    };
+  }, [conversationId]);
+
+  // Sync missed messages
+  const syncMissedMessages = async () => {
+    if (messages.length === 0) return;
+    const latestId = messages[messages.length - 1].id;
+    if (!latestId) return;
+
+    try {
+      const res = await chatService.getMessages(conversationId, { since_id: latestId });
+      if (res.success && res.messages?.length > 0) {
+        setMessages((prev) => {
+          const ids = new Set(prev.map((m) => m.id));
+          const newOnes = res.messages.filter((m) => !ids.has(m.id));
+          return [...prev, ...newOnes];
+        });
+        if (isNearBottomRef.current) setTimeout(scrollToBottom, 50);
+      }
+    } catch (e) {
+      console.warn('Sync missed messages failed:', e);
     }
   };
 
-  // Scroll to bottom helper
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    setShowScrollBottom(false);
   };
 
-  // Initial load & message polling
-  useEffect(() => {
-    setLoading(true);
-    setOnlineStatus(null);
-    setIsPartnerTyping(false);
-    fetchChatDetails();
+  const handleScroll = (e) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    const fromBottom = scrollHeight - scrollTop - clientHeight;
+    isNearBottomRef.current = fromBottom < 100;
+    setShowScrollBottom(fromBottom >= 150);
 
-    // Start polling every 3 seconds for messages
-    pollingTimerRef.current = setInterval(() => {
-      fetchChatDetails(true);
-    }, 3000);
-
-    return () => {
-      if (pollingTimerRef.current) {
-        clearInterval(pollingTimerRef.current);
-      }
-    };
-  }, [conversationId]);
-
-  // Online status polling every 15 seconds
-  useEffect(() => {
-    const partnerId = conversation?.other_participant?.id;
-    if (!partnerId) return;
-
-    fetchOnlineStatus(partnerId);
-
-    statusTimerRef.current = setInterval(() => {
-      fetchOnlineStatus(partnerId);
-    }, 15000);
-
-    return () => {
-      if (statusTimerRef.current) {
-        clearInterval(statusTimerRef.current);
-      }
-    };
-  }, [conversation?.other_participant?.id]);
-
-  // Typing status polling every 2 seconds
-  useEffect(() => {
-    if (!conversationId) return;
-
-    const fetchTypingStatus = async () => {
-      try {
-        const res = await chatService.getTypingStatus(conversationId);
-        if (res && res.success && res.data) {
-          setIsPartnerTyping(!!res.data.is_typing);
-        }
-      } catch (err) {
-        // Ignore background typing status polling error
-      }
-    };
-
-    fetchTypingStatus();
-
-    typingStatusTimerRef.current = setInterval(fetchTypingStatus, 2000);
-
-    return () => {
-      if (typingStatusTimerRef.current) {
-        clearInterval(typingStatusTimerRef.current);
-      }
-    };
-  }, [conversationId]);
-
-  // Scroll to bottom on new messages or typing state change
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, isPartnerTyping]);
-
-  // Clean up recording timer and object URLs on unmount/url change
-  useEffect(() => {
-    return () => {
-      if (recordingTimerIntervalRef.current) {
-        clearInterval(recordingTimerIntervalRef.current);
-      }
-      if (reviewAudioUrl) {
-        URL.revokeObjectURL(reviewAudioUrl);
-      }
-    };
-  }, [reviewAudioUrl]);
-
-  const getSupportedMimeType = () => {
-    const types = ['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/wav'];
-    for (const type of types) {
-      if (MediaRecorder.isTypeSupported(type)) {
-        return type;
-      }
+    // If scrolled to top, load older messages
+    if (scrollTop < 50 && hasMore && !loadingOlder) {
+      loadOlderMessages();
     }
-    return '';
   };
 
-  const handlePointerDown = async (e) => {
-    // Only handle left mouse click or touch/pen pointers
-    if (e.button !== undefined && e.button !== 0) return;
-    
-    // Prevent default actions to stop text selection/scrolling
-    e.preventDefault();
-
-    const targetElement = e.currentTarget;
-    const pointerId = e.pointerId;
-    const clientX = e.clientX;
-    const clientY = e.clientY;
-    
+  const loadOlderMessages = async () => {
+    if (messages.length === 0 || loadingOlder) return;
+    setLoadingOlder(true);
+    const oldestId = messages[0].id;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      
-      // Capture pointer events on the target element
-      if (targetElement) {
-        try {
-          targetElement.setPointerCapture(pointerId);
-        } catch (captureErr) {
-          console.error('Failed to set pointer capture:', captureErr);
-        }
-      }
-      pointerIdRef.current = pointerId;
-      
-      // Initialize drag start coordinates
-      dragStartRef.current = { x: clientX, y: clientY };
-      setDragDeltaX(0);
-      setDragDeltaY(0);
-      isDragCancelledRef.current = false;
-      isDragLockedRef.current = false;
-      isReviewModeRef.current = false;
-      
-      audioChunksRef.current = [];
-      const options = { mimeType: getSupportedMimeType() };
-      const mediaRecorder = new MediaRecorder(stream, options);
-      mediaRecorderRef.current = mediaRecorder;
-      
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-      
-      mediaRecorder.onstop = async () => {
-        // Stop all track streams to turn off mic hardware indicator
-        stream.getTracks().forEach((track) => track.stop());
-        
-        if (isDragCancelledRef.current) {
-          audioChunksRef.current = [];
-          return;
-        }
-        
-        const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorder.mimeType || 'audio/webm' });
-        
-        if (isReviewModeRef.current) {
-          const url = URL.createObjectURL(audioBlob);
-          setReviewAudioUrl(url);
-          setReviewAudioBlob(audioBlob);
-          setRecordingState('review');
-        } else {
-          // Send immediately
-          await sendVoiceMessage(audioBlob, recordingSeconds || 1);
-          setRecordingState('idle');
-        }
-      };
-      
-      setRecordingSeconds(0);
-      setRecordingState('recording');
-      mediaRecorder.start();
-      
-      recordingTimerIntervalRef.current = setInterval(() => {
-        setRecordingSeconds((prev) => prev + 1);
-      }, 1000);
-      
-    } catch (err) {
-      console.error('Microphone access denied or error:', err);
-      showToast('Microphone access is required to send voice messages', 'error');
-    }
-  };
-
-  const handlePointerMove = (e) => {
-    if (recordingState !== 'recording') return;
-    if (pointerIdRef.current !== e.pointerId) return;
-    
-    const deltaX = e.clientX - dragStartRef.current.x;
-    const deltaY = e.clientY - dragStartRef.current.y;
-    
-    setDragDeltaX(deltaX);
-    setDragDeltaY(deltaY);
-    
-    // DRAG LEFT: cancel threshold (e.g. 100-120px) -> let's use 110px
-    if (deltaX < -110) {
-      cancelRecording(e.currentTarget);
-      return;
-    }
-    
-    // DRAG UP: lock threshold (e.g. 60-80px) -> let's use 70px
-    if (deltaY < -70) {
-      lockRecording(e.currentTarget);
-    }
-  };
-
-  const handlePointerUp = (e) => {
-    if (recordingState !== 'recording') return;
-    if (pointerIdRef.current !== e.pointerId) return;
-    
-    try {
-      e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch (err) {}
-    pointerIdRef.current = null;
-    
-    // Stop recording and send immediately
-    stopRecording(false);
-  };
-
-  const cancelRecording = (target) => {
-    isDragCancelledRef.current = true;
-    if (target && pointerIdRef.current !== null) {
-      try {
-        target.releasePointerCapture(pointerIdRef.current);
-      } catch (err) {}
-    }
-    pointerIdRef.current = null;
-    
-    stopRecording(true);
-    showToast('Recording cancelled', 'success');
-  };
-
-  const lockRecording = (target) => {
-    isDragLockedRef.current = true;
-    setRecordingState('locked');
-    if (target && pointerIdRef.current !== null) {
-      try {
-        target.releasePointerCapture(pointerIdRef.current);
-      } catch (err) {}
-    }
-    pointerIdRef.current = null;
-  };
-
-  const stopRecording = (discard = false) => {
-    if (recordingTimerIntervalRef.current) {
-      clearInterval(recordingTimerIntervalRef.current);
-      recordingTimerIntervalRef.current = null;
-    }
-    
-    if (discard) {
-      isDragCancelledRef.current = true;
-    }
-    
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
-    
-    if (discard) {
-      setRecordingState('idle');
-      setRecordingSeconds(0);
-    }
-  };
-
-  const handleStopRecordingLocked = () => {
-    isReviewModeRef.current = true;
-    setReviewDuration(recordingSeconds);
-    stopRecording(false);
-  };
-
-  const handleDiscardReview = () => {
-    if (reviewAudioUrl) {
-      URL.revokeObjectURL(reviewAudioUrl);
-    }
-    setReviewAudioUrl(null);
-    setReviewAudioBlob(null);
-    setReviewDuration(0);
-    setRecordingState('idle');
-  };
-
-  const handleSendReview = async () => {
-    if (!reviewAudioBlob) return;
-    const blobToSend = reviewAudioBlob;
-    const durationToSend = reviewDuration || 1;
-    handleDiscardReview();
-    await sendVoiceMessage(blobToSend, durationToSend);
-  };
-
-  const sendVoiceMessage = async (audioBlob, duration) => {
-    setSending(true);
-    try {
-      const audioFile = new File([audioBlob], 'voice_message.webm', { type: audioBlob.type });
-      const response = await chatService.sendVoiceMessage(conversationId, audioFile, duration);
-      if (response.success && response.data) {
-        setMessages((prev) => [...prev, response.data]);
-        scrollToBottom();
-      } else {
-        showToast('Failed to send voice message.', 'error');
+      const res = await chatService.getMessages(conversationId, { before_id: oldestId, limit: 30 });
+      if (res.success) {
+        setMessages((prev) => [...(res.messages || []), ...prev]);
+        setHasMore(res.has_more);
       }
     } catch (err) {
-      showToast(err.message || 'Failed to send voice message.', 'error');
+      console.error('Failed to load older messages:', err);
     } finally {
-      setSending(false);
+      setLoadingOlder(false);
     }
-  };
-
-  const formatDuration = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
   const handleInputChange = (e) => {
-    setNewMessage(e.target.value);
+    setInputText(e.target.value);
 
-    // Throttled typing signal (at most once every 2.5s while typing)
-    const now = Date.now();
-    if (now - lastTypingSentRef.current >= 2500) {
-      lastTypingSentRef.current = now;
-      chatService.sendTypingSignal(conversationId).catch(() => {});
+    // Typing indicator
+    if (!isTyping) {
+      setIsTyping(true);
+      wsService.sendTyping(conversationId, true);
     }
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    typingTimeoutRef.current = setTimeout(() => {
+      setIsTyping(false);
+      wsService.sendTyping(conversationId, false);
+    }, 1500);
   };
 
-  const handleSend = async (e) => {
-    e.preventDefault();
-    if (!newMessage.trim() || sending) return;
+  const handleSendMessage = async (e) => {
+    e?.preventDefault();
+    const text = inputText.trim();
+    if (!text) return;
 
-    const contentToSend = newMessage.trim();
-    setNewMessage('');
-    setSending(true);
+    const clientMsgId = `cli-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
-    try {
-      const response = await chatService.sendMessage(conversationId, contentToSend);
-      if (response.success && response.data) {
-        // Add to local message list immediately
-        setMessages((prev) => [...prev, response.data]);
-        scrollToBottom();
-      } else {
-        showToast('Failed to send message.', 'error');
+    // Optimistic UI message
+    const optimisticMsg = {
+      id: `temp-${Date.now()}`,
+      client_message_id: clientMsgId,
+      conversation_id: Number(conversationId),
+      sender_profile_id: profile?.profile_id,
+      sender_display_name: profile?.display_name,
+      content: text,
+      status: 'sending',
+      created_at: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, optimisticMsg]);
+    setInputText('');
+    setIsTyping(false);
+    wsService.sendTyping(conversationId, false);
+    setTimeout(scrollToBottom, 50);
+
+    // Attempt sending via WebSocket
+    const sentWs = wsService.sendMessage(conversationId, text, clientMsgId);
+    if (!sentWs) {
+      // Fallback to REST API
+      try {
+        const res = await chatService.sendMessage(conversationId, text, clientMsgId);
+        if (res.success) {
+          setMessages((prev) =>
+            prev.map((m) => (m.client_message_id === clientMsgId ? res.message : m))
+          );
+        }
+      } catch (err) {
+        showToast(err.message || 'Failed to send message.', 'error');
       }
-    } catch (err) {
-      showToast(err.message || 'Failed to send message.', 'error');
-    } finally {
-      setSending(false);
     }
   };
 
-  const handleStartEdit = (msg, e) => {
-    e.stopPropagation();
-    setEditingMessageId(msg.id);
-    setEditContent(msg.content);
-    setActiveMenuMessageId(null);
-  };
-
-  const handleCancelEdit = () => {
-    setEditingMessageId(null);
-    setEditContent('');
-  };
-
-  const handleSaveEdit = async (msgId) => {
-    if (!editContent.trim()) {
-      showToast('Message cannot be empty.', 'error');
-      return;
-    }
-    setIsEditingSaving(true);
-    try {
-      const res = await chatService.editMessage(msgId, editContent.trim());
-      if (res.success && res.data) {
-        setMessages((prev) =>
-          prev.map((m) => (m.id === msgId ? res.data : m))
-        );
-        setEditingMessageId(null);
-        setEditContent('');
-        showToast('Message updated.', 'success');
-      } else {
-        showToast(res.message || 'Failed to edit message.', 'error');
-      }
-    } catch (err) {
-      showToast(err.message || 'Failed to edit message.', 'error');
-    } finally {
-      setIsEditingSaving(false);
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
     }
   };
 
-  const handleStartDelete = (msgId, e) => {
-    e.stopPropagation();
-    setDeletingMessageId(msgId);
-    setIsDeleteModalOpen(true);
-    setActiveMenuMessageId(null);
+  const formatMessageTime = (isoString) => {
+    if (!isoString) return '';
+    return new Date(isoString).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  const handleConfirmDelete = async () => {
-    if (!deletingMessageId) return;
-    setIsDeleting(true);
-    try {
-      const res = await chatService.deleteMessage(deletingMessageId);
-      if (res.success && res.data) {
-        setMessages((prev) =>
-          prev.map((m) => (m.id === deletingMessageId ? res.data : m))
-        );
-        setIsDeleteModalOpen(false);
-        setDeletingMessageId(null);
-        showToast('Message deleted.', 'success');
-      } else {
-        showToast(res.message || 'Failed to delete message.', 'error');
-      }
-    } catch (err) {
-      showToast(err.message || 'Failed to delete message.', 'error');
-    } finally {
-      setIsDeleting(false);
-    }
-  };
-
-  const getPartner = () => {
-    return conversation?.other_participant || { username: '', full_name: 'Chat Partner' };
-  };
-
-  const partner = getPartner();
-
-  if (loading) {
-    return <Loader />;
-  }
+  const otherUser = conversation?.other_participant;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-130px)] md:h-[calc(100vh-150px)] max-w-3xl mx-auto glass-panel rounded-3xl border border-[#F4C0D1] dark:border-brand-purple/10 overflow-hidden bg-white/70 dark:bg-brand-dark/15 transition-colors duration-200">
+    <div className="flex flex-col h-[calc(100vh-8rem)] max-w-4xl mx-auto rounded-3xl bg-slate-900/90 border border-slate-800 shadow-2xl overflow-hidden backdrop-blur-xl">
       {/* Chat Header */}
-      <div className="px-5 py-4 border-b border-[#F4C0D1] dark:border-slate-900 flex items-center justify-between bg-white/90 dark:bg-brand-black/45 backdrop-blur-md">
+      <div className="px-5 py-3.5 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0">
         <div className="flex items-center gap-3">
-          <Link
-            to="/conversations"
-            className="p-1.5 rounded-lg text-[#5F5E5A] dark:text-slate-400 hover:text-[#2C2C2A] dark:hover:text-slate-200 hover:bg-[#F4C0D1]/30 dark:hover:bg-slate-800/40 transition-colors"
+          <button
+            onClick={() => navigate('/dashboard')}
+            className="p-2 -ml-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
           >
             <ArrowLeft className="w-5 h-5" />
-          </Link>
-          
-          <div className="relative">
-            <div className="w-9 h-9 rounded-full bg-[#D4537E]/15 dark:bg-brand-purple/15 flex items-center justify-center border border-[#D4537E]/30 dark:border-brand-purple/25 text-[#D4537E] dark:text-brand-purple-light text-xs font-bold uppercase">
-              {partner.username ? partner.username.substring(0, 2) : 'CK'}
-            </div>
-            {onlineStatus?.is_online && (
-              <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-950" />
+          </button>
+
+          <div className="relative w-11 h-11 rounded-xl overflow-hidden bg-slate-800 border border-slate-700 shrink-0">
+            {otherUser?.profile_picture ? (
+              <img src={otherUser.profile_picture} alt="" className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center font-bold text-lg text-pink-400 bg-pink-500/10">
+                {otherUser?.display_name?.charAt(0) || 'U'}
+              </div>
+            )}
+            {otherUser?.is_online && (
+              <span className="absolute bottom-0.5 right-0.5 w-2.5 h-2.5 bg-emerald-500 border-2 border-slate-900 rounded-full" />
             )}
           </div>
 
-          <div className="text-left">
-            <h3 className="text-sm font-bold text-[#2C2C2A] dark:text-slate-200">{partner.full_name}</h3>
+          <div>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] text-[#5F5E5A] dark:text-slate-500 font-semibold">@{partner.username}</span>
-              {isPartnerTyping ? (
-                <div className="flex items-center gap-1 text-[10px] text-[#D4537E] dark:text-brand-purple-light font-semibold">
-                  <span className="animate-pulse">typing</span>
-                  <span className="flex gap-0.5 items-center">
-                    <span className="w-1 h-1 rounded-full bg-[#D4537E] dark:bg-brand-purple-light animate-bounce [animation-delay:-0.3s]" />
-                    <span className="w-1 h-1 rounded-full bg-[#D4537E] dark:bg-brand-purple-light animate-bounce [animation-delay:-0.15s]" />
-                    <span className="w-1 h-1 rounded-full bg-[#D4537E] dark:bg-brand-purple-light animate-bounce" />
-                  </span>
-                </div>
-              ) : onlineStatus ? (
-                <div className="flex items-center gap-1">
-                  {onlineStatus.is_online ? (
-                    <>
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block animate-pulse" />
-                      <span className="text-[10px] text-emerald-500 dark:text-emerald-400 font-semibold">Online</span>
-                    </>
-                  ) : onlineStatus.last_seen ? (
-                    <>
-                      <span className="w-1.5 h-1.5 rounded-full bg-slate-400 dark:bg-slate-500 inline-block" />
-                      <span className="text-[10px] text-[#5F5E5A] dark:text-slate-400">
-                        Last seen {formatRelativeTime(onlineStatus.last_seen)}
-                      </span>
-                    </>
-                  ) : null}
-                </div>
-              ) : null}
+              <h3 className="font-bold text-sm text-white">{otherUser?.display_name || 'Chat'}</h3>
+              <span className="font-mono text-xs text-pink-400 font-semibold">{otherUser?.profile_id}</span>
+            </div>
+            <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
+              {otherUserTyping ? (
+                <span className="text-pink-400 font-medium animate-pulse">Typing...</span>
+              ) : otherUser?.is_online ? (
+                <span className="text-emerald-400">Online</span>
+              ) : (
+                <span>Offline</span>
+              )}
             </div>
           </div>
         </div>
+
+        {/* Reconnect Status Banner */}
+        {!isWsConnected && (
+          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs">
+            <WifiOff className="w-3.5 h-3.5 animate-pulse" />
+            <span className="hidden sm:inline">Connecting...</span>
+          </div>
+        )}
       </div>
 
-      {/* Messages Scroll Zone */}
-      <div className="flex-grow overflow-y-auto p-5 space-y-4">
-        {messages.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-[#5F5E5A] dark:text-slate-500 text-center gap-2">
-            <User className="w-8 h-8 text-[#5F5E5A] dark:text-slate-600 mb-2" />
-            <div className="text-xs font-bold">This is the start of your secure chat history.</div>
-            <div className="text-[10px] text-[#5F5E5A] dark:text-slate-600">Send a message to break the ice!</div>
+      {/* Messages Stream */}
+      <div
+        ref={chatContainerRef}
+        onScroll={handleScroll}
+        className="flex-grow p-4 md:p-6 overflow-y-auto space-y-3 bg-gradient-to-b from-slate-950/40 to-slate-900/40 relative"
+      >
+        {loadingOlder && (
+          <div className="py-2 text-center text-xs text-slate-500">
+            Loading older messages...
+          </div>
+        )}
+
+        {isLoading ? (
+          <div className="h-full flex items-center justify-center">
+            <Loader />
+          </div>
+        ) : messages.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center text-center text-slate-500 space-y-2">
+            <div className="w-12 h-12 rounded-2xl bg-slate-800 text-pink-400 flex items-center justify-center">
+              <Send className="w-5 h-5" />
+            </div>
+            <p className="text-sm font-semibold text-slate-300">No messages yet</p>
+            <p className="text-xs">Send a message to say hello to {otherUser?.display_name}!</p>
           </div>
         ) : (
-          messages.map((msg) => {
-            const isMe = msg.sender_username === username;
-            const isEditing = editingMessageId === msg.id;
-            const isDeleted = msg.is_deleted;
-            const isMenuOpen = activeMenuMessageId === msg.id;
-
-            if (isDeleted) {
-              return (
-                <div
-                  key={msg.id}
-                  className={`flex w-full ${isMe ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`max-w-[75%] px-4 py-2.5 rounded-2xl text-xs sm:text-sm italic flex items-center gap-2 border shadow-xs ${
-                      isMe
-                        ? 'bg-slate-100 dark:bg-slate-800/40 text-slate-500 dark:text-slate-400 rounded-br-none border-slate-200 dark:border-slate-800'
-                        : 'bg-slate-100 dark:bg-slate-800/40 text-slate-500 dark:text-slate-400 rounded-bl-none border-slate-200 dark:border-slate-800'
-                    }`}
-                  >
-                    <Ban className="w-3.5 h-3.5 opacity-60 flex-shrink-0" />
-                    <span>This message was deleted</span>
-                  </div>
-                </div>
-              );
-            }
-
-            if (isEditing) {
-              return (
-                <div
-                  key={msg.id}
-                  className={`flex w-full ${isMe ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`max-w-[85%] sm:max-w-[75%] p-3 rounded-2xl ${
-                      isMe
-                        ? 'bg-[#D4537E] dark:bg-brand-purple text-white rounded-br-none'
-                        : 'bg-white dark:bg-brand-black/60 text-[#2C2C2A] dark:text-slate-200 rounded-bl-none'
-                    } border border-[#D4537E]/30 dark:border-brand-purple-light/30 shadow-md`}
-                  >
-                    <div className="flex flex-col gap-2">
-                      <textarea
-                        value={editContent}
-                        onChange={(e) => setEditContent(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && !e.shiftKey) {
-                            e.preventDefault();
-                            handleSaveEdit(msg.id);
-                          } else if (e.key === 'Escape') {
-                            handleCancelEdit();
-                          }
-                        }}
-                        className="w-full text-sm p-2.5 rounded-xl bg-white/20 dark:bg-black/30 border border-white/30 dark:border-slate-700/50 text-white dark:text-slate-100 placeholder-white/60 focus:outline-none focus:ring-1 focus:ring-white/50 resize-none"
-                        rows={2}
-                        autoFocus
-                        disabled={isEditingSaving}
-                      />
-                      <div className="flex justify-end gap-1.5 items-center">
-                        <button
-                          type="button"
-                          onClick={handleCancelEdit}
-                          disabled={isEditingSaving}
-                          className="px-2.5 py-1 text-xs rounded-lg bg-black/20 hover:bg-black/30 text-white/90 transition-colors flex items-center gap-1 cursor-pointer"
-                        >
-                          <X className="w-3 h-3" /> Cancel
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleSaveEdit(msg.id)}
-                          disabled={isEditingSaving || !editContent.trim()}
-                          className="px-2.5 py-1 text-xs rounded-lg bg-white dark:bg-brand-purple-light text-[#D4537E] dark:text-brand-dark font-bold hover:bg-white/90 transition-colors flex items-center gap-1 cursor-pointer disabled:opacity-50"
-                        >
-                          <Check className="w-3 h-3" /> Save
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            }
-
+          messages.map((msg, index) => {
+            const isMe = msg.sender_profile_id === profile?.profile_id;
             return (
               <div
-                key={msg.id}
-                className={`group relative flex w-full items-center gap-1 ${isMe ? 'justify-end' : 'justify-start'}`}
+                key={msg.client_message_id || msg.id || index}
+                className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}
               >
-                {/* Options Button for Sender (isMe) */}
-                {isMe && (
-                  <div className="relative flex-shrink-0">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setActiveMenuMessageId(isMenuOpen ? null : msg.id);
-                      }}
-                      className="p-1 rounded-full text-slate-400 dark:text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 opacity-70 sm:opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity cursor-pointer"
-                      title="Message options"
-                    >
-                      <MoreVertical className="w-3.5 h-3.5" />
-                    </button>
-
-                    {/* Options Dropdown Menu */}
-                    {isMenuOpen && (
-                      <div
-                        onClick={(e) => e.stopPropagation()}
-                        className="absolute right-0 bottom-full mb-1 z-30 min-w-[110px] py-1 bg-white dark:bg-slate-900 border border-[#F4C0D1] dark:border-slate-800 rounded-xl shadow-xl backdrop-blur-md animate-fade-in"
-                      >
-                        {msg.message_type !== 'voice' && (
-                          <button
-                            type="button"
-                            onClick={(e) => handleStartEdit(msg, e)}
-                            className="w-full px-3 py-1.5 text-xs text-left text-[#2C2C2A] dark:text-slate-200 hover:bg-[#F4C0D1]/20 dark:hover:bg-slate-800 flex items-center gap-2 cursor-pointer transition-colors"
-                          >
-                            <Pencil className="w-3.5 h-3.5 text-[#D4537E] dark:text-brand-purple-light" />
-                            Edit
-                          </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={(e) => handleStartDelete(msg.id, e)}
-                          className="w-full px-3 py-1.5 text-xs text-left text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center gap-2 cursor-pointer transition-colors"
-                        >
-                          <Trash2 className="w-3.5 h-3.5 text-rose-500" />
-                          Delete
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-
                 <div
-                  className={`max-w-[75%] px-4 py-3 rounded-2xl text-sm ${
+                  className={`max-w-[80%] md:max-w-[70%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm break-words ${
                     isMe
-                      ? 'bg-[#D4537E] dark:bg-brand-purple text-white rounded-br-none border border-[#D4537E]/20 dark:border-brand-purple-light/20 shadow-md'
-                      : 'bg-white dark:bg-brand-black/60 text-[#2C2C2A] dark:text-slate-200 rounded-bl-none border border-[#F4C0D1] dark:border-slate-800 shadow-xs'
+                      ? 'bg-gradient-to-r from-pink-500 to-indigo-600 text-white rounded-br-xs shadow-pink-500/10'
+                      : 'bg-slate-800 border border-slate-700/60 text-slate-100 rounded-bl-xs'
                   }`}
                 >
-                  {msg.message_type === 'voice' ? (
-                    <VoiceMessagePlayer
-                      audioUrl={msg.audio_file}
-                      duration={msg.duration_seconds}
-                      isMe={isMe}
-                    />
-                  ) : (
-                    <p className="leading-relaxed break-words text-left">{msg.content}</p>
-                  )}
+                  <p className="whitespace-pre-wrap">{msg.content}</p>
                   <div
-                    className={`text-[8px] font-semibold mt-1 text-left flex items-center gap-1 ${
-                      isMe ? 'text-pink-100 dark:text-purple-300' : 'text-[#5F5E5A] dark:text-slate-500'
+                    className={`flex items-center justify-end gap-1 text-[10px] mt-1 ${
+                      isMe ? 'text-pink-100/70' : 'text-slate-400'
                     }`}
                   >
-                    <span>
-                      {new Date(msg.created_at).toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </span>
-                    {msg.is_edited && (
-                      <span className="italic opacity-85 text-[9px]">(edited)</span>
+                    <span>{formatMessageTime(msg.created_at)}</span>
+                    {isMe && (
+                      <span className="ml-0.5">
+                        {msg.status === 'sending' ? (
+                          <Clock className="w-3 h-3 animate-spin" />
+                        ) : msg.status === 'seen' ? (
+                          <CheckCheck className="w-3.5 h-3.5 text-pink-200" />
+                        ) : (
+                          <Check className="w-3.5 h-3.5 text-pink-200/70" />
+                        )}
+                      </span>
                     )}
                   </div>
                 </div>
@@ -756,237 +406,53 @@ export const Chat = () => {
           })
         )}
 
-        {/* WhatsApp-style typing indicator bubble in message area */}
-        {isPartnerTyping && (
-          <div className="flex w-full justify-start animate-fade-in">
-            <div className="bg-white dark:bg-brand-black/60 text-[#5F5E5A] dark:text-slate-400 px-4 py-2 rounded-2xl rounded-bl-none border border-[#F4C0D1] dark:border-slate-800 flex items-center gap-2 text-xs shadow-xs">
-              <span className="text-[#D4537E] dark:text-brand-purple-light font-medium text-[11px]">{partner.full_name || partner.username} is typing</span>
-              <span className="flex gap-1 items-center">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#D4537E] dark:bg-brand-purple-light animate-bounce [animation-delay:-0.3s]" />
-                <span className="w-1.5 h-1.5 rounded-full bg-[#D4537E] dark:bg-brand-purple-light animate-bounce [animation-delay:-0.15s]" />
-                <span className="w-1.5 h-1.5 rounded-full bg-[#D4537E] dark:bg-brand-purple-light animate-bounce" />
-              </span>
-            </div>
+        {/* Real-time typing bubble */}
+        {otherUserTyping && (
+          <div className="flex items-center gap-1.5 p-3 rounded-2xl bg-slate-800/60 border border-slate-700/40 text-slate-400 text-xs w-20">
+            <span className="w-2 h-2 bg-pink-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
+            <span className="w-2 h-2 bg-pink-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
+            <span className="w-2 h-2 bg-pink-400 rounded-full animate-bounce" />
           </div>
         )}
 
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Floating Scroll to Bottom Button */}
+      {showScrollBottom && (
+        <button
+          onClick={scrollToBottom}
+          className="absolute bottom-20 right-8 p-2.5 rounded-full bg-pink-500 hover:bg-pink-600 text-white shadow-xl transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer z-10"
+        >
+          <ChevronDown className="w-4 h-4" />
+          <span>New messages</span>
+        </button>
+      )}
+
+      {/* Bottom Input Field */}
       <form
-        onSubmit={handleSend}
-        className="relative p-4 border-t border-[#F4C0D1] dark:border-slate-900 flex gap-3 items-center bg-white/90 dark:bg-brand-black/35 backdrop-blur-md"
+        onSubmit={handleSendMessage}
+        className="p-3 md:p-4 bg-slate-950/80 border-t border-slate-800 flex items-end gap-2 shrink-0"
       >
-        {recordingState === 'idle' && (
-          <>
-            <input
-              type="text"
-              className="flex-grow glass-input px-4 py-3 rounded-xl text-sm"
-              placeholder="Type your message..."
-              value={newMessage}
-              onChange={handleInputChange}
-              disabled={sending}
-              required
-            />
-            
-            {/* Mic Button */}
-            <button
-              type="button"
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              style={{ touchAction: 'none' }}
-              className="p-3 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-[#5F5E5A] dark:text-slate-400 rounded-xl border border-transparent transition-all duration-200 flex items-center justify-center flex-shrink-0 cursor-pointer shadow-xs relative select-none"
-              title="Hold to record voice message"
-            >
-              <Mic className="w-4.5 h-4.5" />
-            </button>
+        <textarea
+          rows={1}
+          placeholder="Type a message..."
+          value={inputText}
+          onChange={handleInputChange}
+          onKeyDown={handleKeyDown}
+          className="flex-grow px-4 py-3 rounded-2xl bg-slate-900 border border-slate-800 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-pink-500 focus:ring-1 focus:ring-pink-500 transition-all resize-none max-h-32 leading-relaxed"
+        />
 
-            {/* Send Button */}
-            <button
-              type="submit"
-              className="p-3 bg-[#D4537E] hover:bg-[#c2436d] dark:bg-brand-purple dark:hover:bg-brand-purple-dark text-white rounded-xl border border-transparent dark:border-brand-purple-light/20 transition-all duration-200 flex items-center justify-center flex-shrink-0 cursor-pointer shadow-md shadow-[#D4537E]/10 dark:shadow-brand-purple/10 disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={sending || !newMessage.trim()}
-            >
-              <Send className="w-4.5 h-4.5" />
-            </button>
-          </>
-        )}
-
-        {recordingState === 'recording' && (
-          <div className="flex-grow flex items-center justify-between w-full h-[46px]">
-            {/* Pulsing red dot and Timer */}
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
-              <span className="text-sm font-bold text-rose-500 dark:text-rose-400">
-                {formatDuration(recordingSeconds)}
-              </span>
-            </div>
-
-            {/* Slide to Cancel Indicator */}
-            <div
-              style={{
-                transform: `translateX(${Math.min(0, dragDeltaX)}px)`,
-                opacity: Math.max(0.1, 1 + dragDeltaX / 110),
-              }}
-              className="flex items-center gap-1 text-xs text-[#5F5E5A] dark:text-slate-400 font-semibold select-none transition-transform duration-75"
-            >
-              <ChevronLeft className="w-4 h-4 animate-pulse" />
-              <span>Slide to cancel</span>
-            </div>
-
-            {/* Mic Button (Active) - remains mounted here */}
-            <button
-              type="button"
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              style={{ touchAction: 'none' }}
-              className="p-3 bg-rose-500 text-white rounded-xl shadow-md shadow-rose-500/20 scale-110 flex items-center justify-center flex-shrink-0 relative select-none"
-            >
-              <Mic className="w-4.5 h-4.5 animate-pulse" />
-
-              {/* Lock UI Indicator */}
-              <div
-                style={{
-                  transform: `translate(-50%, ${Math.max(-70, Math.min(0, dragDeltaY))}px)`,
-                  opacity: Math.max(0.1, 1 + dragDeltaY / 70),
-                }}
-                className="absolute bottom-14 left-1/2 flex flex-col items-center gap-0.5 text-[10px] text-[#5F5E5A] dark:text-slate-400 select-none pointer-events-none transition-transform duration-75"
-              >
-                <ChevronUp className="w-3.5 h-3.5 animate-bounce" />
-                <span className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 px-2 py-0.5 rounded-md shadow-sm font-bold">
-                  Lock
-                </span>
-              </div>
-            </button>
-          </div>
-        )}
-
-        {recordingState === 'locked' && (
-          <div className="flex-grow flex items-center justify-between w-full h-[46px]">
-            {/* Discard/Trash Button */}
-            <button
-              type="button"
-              onClick={() => stopRecording(true)}
-              className="p-2.5 text-slate-400 hover:text-rose-500 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-xl transition-all duration-200 cursor-pointer"
-              title="Discard recording"
-            >
-              <Trash2 className="w-5 h-5" />
-            </button>
-
-            {/* Pulse Red Dot + Timer */}
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse" />
-              <span className="text-sm font-bold text-rose-500 dark:text-rose-400">
-                {formatDuration(recordingSeconds)}
-              </span>
-            </div>
-
-            {/* Stop and Send Buttons */}
-            <div className="flex items-center gap-2">
-              {/* Stop Button */}
-              <button
-                type="button"
-                onClick={handleStopRecordingLocked}
-                className="p-3 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl border border-transparent transition-all duration-200 flex items-center justify-center cursor-pointer shadow-xs"
-                title="Stop and preview"
-              >
-                <Square className="w-4 h-4 fill-current" />
-              </button>
-
-              {/* Send Button */}
-              <button
-                type="button"
-                onClick={() => stopRecording(false)}
-                className="p-3 bg-[#D4537E] hover:bg-[#c2436d] dark:bg-brand-purple dark:hover:bg-brand-purple-dark text-white rounded-xl border border-transparent transition-all duration-200 flex items-center justify-center cursor-pointer shadow-md shadow-[#D4537E]/10"
-                title="Send voice message"
-              >
-                <Send className="w-4.5 h-4.5" />
-              </button>
-            </div>
-          </div>
-        )}
-
-        {recordingState === 'review' && (
-          <div className="flex-grow flex items-center justify-between w-full h-[46px] gap-3">
-            {/* Discard/Trash Button */}
-            <button
-              type="button"
-              onClick={handleDiscardReview}
-              className="p-2.5 text-slate-400 hover:text-rose-500 dark:hover:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-xl transition-all duration-200 cursor-pointer flex-shrink-0"
-              title="Discard recording"
-            >
-              <Trash2 className="w-5 h-5" />
-            </button>
-
-            {/* Local Preview Player */}
-            <div className="flex-grow bg-slate-50 dark:bg-slate-900/40 border border-slate-100 dark:border-slate-800/80 px-3 rounded-2xl flex items-center justify-center max-w-[320px] mx-auto">
-              <VoiceMessagePlayer
-                audioUrl={reviewAudioUrl}
-                duration={reviewDuration}
-                isMe={false}
-              />
-            </div>
-
-            {/* Send Button */}
-            <button
-              type="button"
-              onClick={handleSendReview}
-              className="p-3 bg-[#D4537E] hover:bg-[#c2436d] dark:bg-brand-purple dark:hover:bg-brand-purple-dark text-white rounded-xl border border-transparent transition-all duration-200 flex items-center justify-center flex-shrink-0 cursor-pointer shadow-md shadow-[#D4537E]/10"
-              title="Send voice message"
-            >
-              <Send className="w-4 h-4" />
-            </button>
-          </div>
-        )}
+        <button
+          type="submit"
+          disabled={!inputText.trim()}
+          className="p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer shrink-0"
+        >
+          <Send className="w-5 h-5" />
+        </button>
       </form>
-
-      {/* Delete Confirmation Modal */}
-      <Modal
-        isOpen={isDeleteModalOpen}
-        onClose={() => {
-          if (!isDeleting) {
-            setIsDeleteModalOpen(false);
-            setDeletingMessageId(null);
-          }
-        }}
-        title="Delete Message"
-      >
-        <div className="flex flex-col gap-4">
-          <div className="flex items-center gap-3 text-rose-500">
-            <AlertTriangle className="w-6 h-6 flex-shrink-0" />
-            <p className="text-sm font-medium text-[#2C2C2A] dark:text-slate-200">
-              Are you sure you want to delete this message? This action cannot be undone.
-            </p>
-          </div>
-
-          <div className="flex justify-end gap-2 mt-2">
-            <button
-              type="button"
-              disabled={isDeleting}
-              onClick={() => {
-                setIsDeleteModalOpen(false);
-                setDeletingMessageId(null);
-              }}
-              className="px-4 py-2 text-xs font-semibold rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={isDeleting}
-              onClick={handleConfirmDelete}
-              className="px-4 py-2 text-xs font-semibold rounded-xl bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition-colors cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
-            >
-              {isDeleting ? 'Deleting...' : 'Delete'}
-            </button>
-          </div>
-        </div>
-      </Modal>
     </div>
   );
 };
 
 export default Chat;
-
