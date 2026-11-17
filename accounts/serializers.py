@@ -126,11 +126,16 @@ class ConversationSerializer(serializers.ModelSerializer):
         return ProfilePublicSerializer(getattr(other, 'profile', None)).data
 
     def get_last_message(self, obj):
-        last_msg = obj.messages.order_by('-created_at').first()
+        if hasattr(obj, 'prefetched_last_message'):
+            last_msg = obj.prefetched_last_message
+        else:
+            last_msg = obj.messages.order_by('-created_at').first()
         if last_msg:
             return MessageSerializer(last_msg).data
         return None
 
     def get_unread_count(self, obj):
+        if hasattr(obj, 'annotated_unread_count'):
+            return obj.annotated_unread_count
         user = self.context.get('request').user
         return obj.messages.filter(is_read=False).exclude(sender=user).count()

@@ -3,20 +3,25 @@ import { useNavigate, Link } from 'react-router-dom';
 import { Users, MessageSquare, Search, UserPlus } from 'lucide-react';
 import { connectService } from '../services/connectService';
 import { wsService } from '../services/websocketService';
+import { cacheGet, cacheSet } from '../utils/cache';
 import Loader from '../components/Loader';
 
 export const ConnectedProfiles = () => {
-  const [connections, setConnections] = useState([]);
+  const [connections, setConnections] = useState(() => cacheGet('connected_profiles') || []);
   const [search, setSearch] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => !cacheGet('connected_profiles'));
   const navigate = useNavigate();
 
-  const fetchConnections = async () => {
-    setIsLoading(true);
+  const fetchConnections = async (silent = false) => {
+    if (!silent && !cacheGet('connected_profiles')) {
+      setIsLoading(true);
+    }
     try {
       const res = await connectService.getConnectedProfiles();
       if (res.success) {
-        setConnections(res.connections || []);
+        const list = res.connections || [];
+        setConnections(list);
+        cacheSet('connected_profiles', list, 120);
       }
     } catch (err) {
       console.error('Error fetching connections:', err);
@@ -26,12 +31,13 @@ export const ConnectedProfiles = () => {
   };
 
   useEffect(() => {
-    fetchConnections();
+    const hasCache = Boolean(cacheGet('connected_profiles'));
+    fetchConnections(hasCache);
 
     // Real-time presence update
     const unsubPresence = wsService.on('presence_update', (event) => {
-      setConnections((prev) =>
-        prev.map((c) => {
+      setConnections((prev) => {
+        const updated = prev.map((c) => {
           if (c.profile?.profile_id === event.profile_id) {
             return {
               ...c,
@@ -43,8 +49,10 @@ export const ConnectedProfiles = () => {
             };
           }
           return c;
-        })
-      );
+        });
+        cacheSet('connected_profiles', updated, 120);
+        return updated;
+      });
     });
 
     return () => unsubPresence();

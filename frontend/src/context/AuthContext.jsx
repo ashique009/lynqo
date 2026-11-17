@@ -1,6 +1,7 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
 import { profileService } from '../services/profileService';
 import { wsService } from '../services/websocketService';
+import { cacheInvalidate } from '../utils/cache';
 
 const AuthContext = createContext(null);
 
@@ -14,7 +15,13 @@ export const AuthProvider = ({ children }) => {
       return null;
     }
   });
-  const [isLoading, setIsLoading] = useState(true);
+
+  // Only show blocking loading state if token exists without a cached profile
+  const [isLoading, setIsLoading] = useState(() => {
+    const savedToken = localStorage.getItem('lynqo_token');
+    const savedProfile = localStorage.getItem('lynqo_profile');
+    return Boolean(savedToken && !savedProfile);
+  });
 
   const fetchCurrentProfile = async (authToken) => {
     try {
@@ -37,6 +44,8 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     if (token) {
+      // Connect WebSocket immediately using token to avoid cold connection latency
+      wsService.connect(token);
       fetchCurrentProfile(token);
     } else {
       setIsLoading(false);
@@ -46,6 +55,7 @@ export const AuthProvider = ({ children }) => {
   const clearAuth = () => {
     localStorage.removeItem('lynqo_token');
     localStorage.removeItem('lynqo_profile');
+    cacheInvalidate();
     setToken(null);
     setProfile(null);
     wsService.disconnect();

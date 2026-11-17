@@ -398,7 +398,7 @@ class IncomingRequestsView(APIView):
         requests = ConnectRequest.objects.filter(
             receiver=request.user,
             status='pending'
-        ).select_related('sender__profile', 'receiver__profile').order_by('-created_at')
+        ).select_related('sender__profile__user', 'receiver__profile__user').order_by('-created_at')
         return Response({
             'success': True,
             'requests': ConnectRequestSerializer(requests, many=True).data,
@@ -412,7 +412,7 @@ class OutgoingRequestsView(APIView):
         requests = ConnectRequest.objects.filter(
             sender=request.user,
             status='pending'
-        ).select_related('sender__profile', 'receiver__profile').order_by('-created_at')
+        ).select_related('sender__profile__user', 'receiver__profile__user').order_by('-created_at')
         return Response({
             'success': True,
             'requests': ConnectRequestSerializer(requests, many=True).data,
@@ -518,21 +518,41 @@ class ConnectedProfilesView(APIView):
         reqs = ConnectRequest.objects.filter(
             (models.Q(sender=request.user) | models.Q(receiver=request.user)),
             status='accepted'
-        ).select_related('sender__profile', 'receiver__profile')
+        ).select_related('sender__profile__user', 'receiver__profile__user')
 
-        connections = []
+        other_users = []
         seen_user_ids = set()
+        user_req_map = {}
 
         for req in reqs:
             other_user = req.receiver if req.sender_id == request.user.id else req.sender
             if other_user.id in seen_user_ids:
                 continue
             seen_user_ids.add(other_user.id)
-            conv, _ = Conversation.get_or_create_between(request.user, other_user)
+            other_users.append(other_user)
+            user_req_map[other_user.id] = req
+
+        # Fetch existing conversations in a single query instead of running queries in a loop
+        existing_convs = Conversation.objects.filter(
+            models.Q(participant_1=request.user) | models.Q(participant_2=request.user)
+        )
+        conv_map = {}
+        for c in existing_convs:
+            other_id = c.participant_2_id if c.participant_1_id == request.user.id else c.participant_1_id
+            conv_map[other_id] = c.id
+
+        connections = []
+        for other_user in other_users:
+            conv_id = conv_map.get(other_user.id)
+            if not conv_id:
+                conv, _ = Conversation.get_or_create_between(request.user, other_user)
+                conv_id = conv.id
+                conv_map[other_user.id] = conv_id
+
             connections.append({
                 'profile': ProfilePublicSerializer(getattr(other_user, 'profile', None)).data,
-                'conversation_id': conv.id,
-                'connected_since': req.updated_at.isoformat(),
+                'conversation_id': conv_id,
+                'connected_since': user_req_map[other_user.id].updated_at.isoformat(),
             })
 
         return Response({'success': True, 'connections': connections})
@@ -546,11 +566,32 @@ class ConversationListView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        convs = Conversation.objects.filter(
+        convs = list(Conversation.objects.filter(
             models.Q(participant_1=request.user) | models.Q(participant_2=request.user)
         ).select_related(
-            'participant_1__profile', 'participant_2__profile'
-        ).prefetch_related('messages').order_by('-updated_at')
+            'participant_1__profile__user', 'participant_2__profile__user'
+        ).annotate(
+            annotated_unread_count=models.Count(
+                'messages',
+                filter=models.Q(messages__is_read=False) & ~models.Q(messages__sender=request.user),
+                distinct=True
+            ),
+            last_message_id=models.Subquery(
+                Message.objects.filter(conversation=models.OuterRef('pk')).order_by('-created_at').values('id')[:1]
+            )
+        ).order_by('-updated_at'))
+
+        # Single batch fetch for all last messages across all conversations (eliminates N+1)
+        last_msg_ids = [c.last_message_id for c in convs if c.last_message_id]
+        if last_msg_ids:
+            messages_by_id = {
+                m.id: m for m in Message.objects.filter(id__in=last_msg_ids).select_related('sender__profile')
+            }
+            for c in convs:
+                c.prefetched_last_message = messages_by_id.get(c.last_message_id)
+        else:
+            for c in convs:
+                c.prefetched_last_message = None
 
         serializer = ConversationSerializer(convs, many=True, context={'request': request})
         return Response({'success': True, 'conversations': serializer.data})
@@ -562,13 +603,27 @@ class ConversationDetailView(APIView):
     def get(self, request, conversation_id):
         try:
             conv = Conversation.objects.select_related(
-                'participant_1__profile', 'participant_2__profile'
+                'participant_1__profile__user', 'participant_2__profile__user'
+            ).annotate(
+                annotated_unread_count=models.Count(
+                    'messages',
+                    filter=models.Q(messages__is_read=False) & ~models.Q(messages__sender=request.user),
+                    distinct=True
+                ),
+                last_message_id=models.Subquery(
+                    Message.objects.filter(conversation=models.OuterRef('pk')).order_by('-created_at').values('id')[:1]
+                )
             ).get(id=conversation_id)
         except Conversation.DoesNotExist:
             return Response({'success': False, 'message': 'Conversation not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         if conv.participant_1_id != request.user.id and conv.participant_2_id != request.user.id:
             return Response({'success': False, 'message': 'Unauthorized.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if conv.last_message_id:
+            conv.prefetched_last_message = Message.objects.filter(id=conv.last_message_id).select_related('sender__profile').first()
+        else:
+            conv.prefetched_last_message = None
 
         serializer = ConversationSerializer(conv, context={'request': request})
         return Response({'success': True, 'conversation': serializer.data})

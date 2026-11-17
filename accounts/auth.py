@@ -38,9 +38,11 @@ class ProfileSessionAuthentication(authentication.BaseAuthentication):
         if session.user.is_banned:
             raise exceptions.PermissionDenied('Account is banned.')
 
-        # Update last seen timestamp lazily (not on every single second)
-        session.last_seen = timezone.now()
-        session.save(update_fields=['last_seen'])
+        # Update last seen timestamp lazily (throttled to once every 60 seconds to avoid excessive DB writes)
+        now = timezone.now()
+        if not session.last_seen or (now - session.last_seen).total_seconds() > 60:
+            session.last_seen = now
+            session.save(update_fields=['last_seen'])
 
         # Store session object on request for downstream usage
         request.profile_session = session

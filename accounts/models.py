@@ -133,6 +133,9 @@ class Conversation(models.Model):
         unique_together = ('participant_1', 'participant_2')
         indexes = [
             models.Index(fields=['participant_1', 'participant_2']),
+            models.Index(fields=['updated_at']),
+            models.Index(fields=['participant_1', '-updated_at']),
+            models.Index(fields=['participant_2', '-updated_at']),
         ]
 
     def __str__(self):
@@ -179,6 +182,7 @@ class Message(models.Model):
             models.Index(fields=['conversation', 'created_at']),
             models.Index(fields=['client_message_id']),
             models.Index(fields=['conversation', 'status']),
+            models.Index(fields=['conversation', 'is_read']),
         ]
 
     def __str__(self):

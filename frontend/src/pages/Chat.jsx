@@ -8,6 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { chatService } from '../services/chatService';
 import { wsService } from '../services/websocketService';
+import { cacheGet, cacheSet } from '../utils/cache';
 import Loader from '../components/Loader';
 
 export const Chat = () => {
@@ -16,10 +17,10 @@ export const Chat = () => {
   const { showToast } = useToast();
   const navigate = useNavigate();
 
-  const [conversation, setConversation] = useState(null);
-  const [messages, setMessages] = useState([]);
+  const [conversation, setConversation] = useState(() => cacheGet(`conv_detail_${conversationId}`) || null);
+  const [messages, setMessages] = useState(() => cacheGet(`conv_msgs_${conversationId}`) || []);
   const [inputText, setInputText] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => !cacheGet(`conv_msgs_${conversationId}`));
   const [isTyping, setIsTyping] = useState(false);
   const [otherUserTyping, setOtherUserTyping] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -35,7 +36,9 @@ export const Chat = () => {
 
   // 1. Load initial conversation details and message history
   const loadInitialData = async () => {
-    setIsLoading(true);
+    if (!cacheGet(`conv_msgs_${conversationId}`)) {
+      setIsLoading(true);
+    }
     try {
       const [convRes, msgRes] = await Promise.all([
         chatService.getConversationDetail(conversationId),
@@ -44,10 +47,13 @@ export const Chat = () => {
 
       if (convRes.success) {
         setConversation(convRes.conversation);
+        cacheSet(`conv_detail_${conversationId}`, convRes.conversation, 120);
       }
       if (msgRes.success) {
-        setMessages(msgRes.messages || []);
+        const msgs = msgRes.messages || [];
+        setMessages(msgs);
         setHasMore(msgRes.has_more);
+        cacheSet(`conv_msgs_${conversationId}`, msgs, 60);
       }
     } catch (err) {
       showToast(err.message || 'Failed to load conversation.', 'error');

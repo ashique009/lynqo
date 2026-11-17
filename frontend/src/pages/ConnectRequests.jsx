@@ -4,27 +4,38 @@ import { UserCheck, UserX, Clock, ArrowUpRight, ArrowDownLeft, Check, X, Message
 import { connectService } from '../services/connectService';
 import { wsService } from '../services/websocketService';
 import { useToast } from '../context/ToastContext';
+import { cacheGet, cacheSet } from '../utils/cache';
 import Loader from '../components/Loader';
 
 export const ConnectRequests = () => {
   const [activeTab, setActiveTab] = useState('incoming');
-  const [incoming, setIncoming] = useState([]);
-  const [outgoing, setOutgoing] = useState([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [incoming, setIncoming] = useState(() => cacheGet('requests_incoming') || []);
+  const [outgoing, setOutgoing] = useState(() => cacheGet('requests_outgoing') || []);
+  const [isLoading, setIsLoading] = useState(() => !cacheGet('requests_incoming'));
   const [processingId, setProcessingId] = useState(null);
 
   const { showToast } = useToast();
   const navigate = useNavigate();
 
-  const fetchRequests = async () => {
-    setIsLoading(true);
+  const fetchRequests = async (silent = false) => {
+    if (!silent && !cacheGet('requests_incoming')) {
+      setIsLoading(true);
+    }
     try {
       const [inRes, outRes] = await Promise.all([
         connectService.getIncomingRequests(),
         connectService.getOutgoingRequests(),
       ]);
-      if (inRes.success) setIncoming(inRes.requests || []);
-      if (outRes.success) setOutgoing(outRes.requests || []);
+      if (inRes.success) {
+        const inList = inRes.requests || [];
+        setIncoming(inList);
+        cacheSet('requests_incoming', inList, 120);
+      }
+      if (outRes.success) {
+        const outList = outRes.requests || [];
+        setOutgoing(outList);
+        cacheSet('requests_outgoing', outList, 120);
+      }
     } catch (err) {
       console.error('Error fetching requests:', err);
     } finally {
@@ -33,11 +44,12 @@ export const ConnectRequests = () => {
   };
 
   useEffect(() => {
-    fetchRequests();
+    const hasCache = Boolean(cacheGet('requests_incoming'));
+    fetchRequests(hasCache);
 
     // Listen for real-time connection events
-    const unsub = wsService.on('connection_event', (event) => {
-      fetchRequests();
+    const unsub = wsService.on('connection_event', () => {
+      fetchRequests(true);
     });
 
     return () => unsub();

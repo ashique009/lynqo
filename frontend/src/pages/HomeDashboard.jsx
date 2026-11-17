@@ -9,6 +9,7 @@ import { useToast } from '../context/ToastContext';
 import { chatService } from '../services/chatService';
 import { connectService } from '../services/connectService';
 import { wsService } from '../services/websocketService';
+import { cacheGet, cacheSet } from '../utils/cache';
 import Loader from '../components/Loader';
 
 export const HomeDashboard = () => {
@@ -16,24 +17,30 @@ export const HomeDashboard = () => {
   const { showToast } = useToast();
   const navigate = useNavigate();
 
-  const [conversations, setConversations] = useState([]);
-  const [pendingRequestsCount, setPendingRequestsCount] = useState(0);
+  const [conversations, setConversations] = useState(() => cacheGet('dashboard_conversations') || []);
+  const [pendingRequestsCount, setPendingRequestsCount] = useState(() => cacheGet('dashboard_pending_count') || 0);
   const [search, setSearch] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(() => !cacheGet('dashboard_conversations'));
   const [copiedId, setCopiedId] = useState(false);
 
-  const loadData = async () => {
-    setIsLoading(true);
+  const loadData = async (silent = false) => {
+    if (!silent && !cacheGet('dashboard_conversations')) {
+      setIsLoading(true);
+    }
     try {
       const [convRes, reqRes] = await Promise.all([
         chatService.getConversations(),
         connectService.getIncomingRequests(),
       ]);
       if (convRes.success) {
-        setConversations(convRes.conversations || []);
+        const convList = convRes.conversations || [];
+        setConversations(convList);
+        cacheSet('dashboard_conversations', convList, 120);
       }
       if (reqRes.success) {
-        setPendingRequestsCount(reqRes.requests?.length || 0);
+        const reqCount = reqRes.requests?.length || 0;
+        setPendingRequestsCount(reqCount);
+        cacheSet('dashboard_pending_count', reqCount, 120);
       }
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
@@ -43,33 +50,37 @@ export const HomeDashboard = () => {
   };
 
   useEffect(() => {
-    loadData();
+    // If we have cached data, fetch in background silently; otherwise show loader
+    const hasCache = Boolean(cacheGet('dashboard_conversations'));
+    loadData(hasCache);
 
     // Listen for real-time conversation updates
     const unsubConv = wsService.on('conversation_update', (event) => {
       setConversations((prev) => {
         const existingIdx = prev.findIndex((c) => c.id === event.conversation_id);
+        let updated;
         if (existingIdx !== -1) {
-          const updated = [...prev];
+          updated = [...prev];
           updated[existingIdx] = {
             ...updated[existingIdx],
             last_message: event.message,
             unread_count: (updated[existingIdx].unread_count || 0) + 1,
             updated_at: event.message.created_at,
           };
-          // Move to top
           const [moved] = updated.splice(existingIdx, 1);
-          return [moved, ...updated];
+          updated = [moved, ...updated];
         } else {
-          loadData();
+          loadData(true);
           return prev;
         }
+        cacheSet('dashboard_conversations', updated, 120);
+        return updated;
       });
     });
 
     const unsubPresence = wsService.on('presence_update', (event) => {
-      setConversations((prev) =>
-        prev.map((c) => {
+      setConversations((prev) => {
+        const updated = prev.map((c) => {
           if (c.other_participant?.profile_id === event.profile_id) {
             return {
               ...c,
@@ -81,12 +92,14 @@ export const HomeDashboard = () => {
             };
           }
           return c;
-        })
-      );
+        });
+        cacheSet('dashboard_conversations', updated, 120);
+        return updated;
+      });
     });
 
     const unsubConn = wsService.on('connection_event', () => {
-      loadData();
+      loadData(true);
     });
 
     return () => {
