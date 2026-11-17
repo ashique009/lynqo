@@ -48,7 +48,6 @@ INSTALLED_APPS = [
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
-    'cloudinary_storage',
     'django.contrib.staticfiles',
     'channels',
     'rest_framework',
@@ -240,6 +239,9 @@ else:
             "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
         },
     }
+
+# Backward compatibility fallback for legacy packages expecting STATICFILES_STORAGE attribute
+STATICFILES_STORAGE = STORAGES["staticfiles"]["BACKEND"]
 
 # CORS & CSRF Settings for Cross-Origin (Vercel Frontend <-> Render Backend)
 CORS_ALLOW_CREDENTIALS = True
