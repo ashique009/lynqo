@@ -577,7 +577,7 @@ class ConversationListView(APIView):
                 distinct=True
             ),
             last_message_id=models.Subquery(
-                Message.objects.filter(conversation=models.OuterRef('pk')).order_by('-created_at').values('id')[:1]
+                Message.objects.filter(conversation=models.OuterRef('pk')).order_by('-created_at', '-id').values('id')[:1]
             )
         ).order_by('-updated_at'))
 
@@ -653,13 +653,17 @@ class MessageListView(APIView):
         if since_id:
             qs = qs.filter(id__gt=int(since_id))
 
-        messages = qs.order_by('-created_at')[:limit]
+        messages = qs.order_by('-created_at', '-id')[:limit]
         messages = list(reversed(messages))
 
         # Mark messages as seen if unread
         unread_ids = [m.id for m in messages if not m.is_read and m.sender_id != request.user.id]
         if unread_ids:
             Message.objects.filter(id__in=unread_ids).update(status='seen', is_read=True)
+            for m in messages:
+                if m.id in unread_ids:
+                    m.status = 'seen'
+                    m.is_read = True
             channel_layer = get_channel_layer()
             if channel_layer:
                 async_to_sync(channel_layer.group_send)(

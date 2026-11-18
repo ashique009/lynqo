@@ -7,6 +7,7 @@ class WebSocketService {
     this.reconnectTimer = null;
     this.pingTimer = null;
     this.currentConvId = null;
+    this.currentToken = null;
     this.isConnected = false;
   }
 
@@ -14,13 +15,14 @@ class WebSocketService {
     const encodedToken = encodeURIComponent(token || '');
 
     // 1. Explicit WebSocket URL
-    if (import.meta.env.VITE_WS_URL) {
-      const base = import.meta.env.VITE_WS_URL.replace(/\/+$/, '');
+    const env = typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env : {};
+    if (env.VITE_WS_URL) {
+      const base = env.VITE_WS_URL.replace(/\/+$/, '');
       return `${base}/ws/chat/?token=${encodedToken}`;
     }
 
     // 2. Derive from API Base URL (e.g. https://<backend>.onrender.com -> wss://<backend>.onrender.com/ws/chat/)
-    const apiUrl = import.meta.env.VITE_API_URL;
+    const apiUrl = env.VITE_API_URL;
     if (apiUrl && typeof apiUrl === 'string' && apiUrl.startsWith('http')) {
       const wsBase = apiUrl
         .replace(/^http:\/\//i, 'ws://')
@@ -38,10 +40,27 @@ class WebSocketService {
   }
 
   connect(token) {
-    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+    if (!token) return;
+
+    // Prevent duplicate WebSocket connections during authentication
+    if (this.currentToken === token && this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
       return;
     }
 
+    // Cancel any pending reconnect timer
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    // Cleanly close any existing socket if switching tokens
+    if (this.ws) {
+      this.ws.onclose = null;
+      this.ws.close();
+      this.ws = null;
+    }
+
+    this.currentToken = token;
     const wsUrl = this.getWsUrl(token);
 
     try {
@@ -82,6 +101,8 @@ class WebSocketService {
 
       if (event.code !== 4001) {
         this.scheduleReconnect(token);
+      } else {
+        this.currentToken = null;
       }
     };
 
@@ -95,7 +116,7 @@ class WebSocketService {
     const delay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), this.maxReconnectDelay);
     this.reconnectAttempts += 1;
     this.reconnectTimer = setTimeout(() => {
-      const activeToken = token || localStorage.getItem('lynqo_token');
+      const activeToken = token || this.currentToken || (typeof localStorage !== 'undefined' ? localStorage.getItem('lynqo_token') : null);
       if (activeToken) {
         this.connect(activeToken);
       }
@@ -189,12 +210,17 @@ class WebSocketService {
   }
 
   disconnect() {
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.stopHeartbeat();
     if (this.ws) {
+      this.ws.onclose = null;
       this.ws.close();
       this.ws = null;
     }
+    this.currentToken = null;
     this.isConnected = false;
     this.currentConvId = null;
   }

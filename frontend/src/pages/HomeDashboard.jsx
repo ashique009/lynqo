@@ -10,6 +10,7 @@ import { chatService } from '../services/chatService';
 import { connectService } from '../services/connectService';
 import { wsService } from '../services/websocketService';
 import { cacheGet, cacheSet } from '../utils/cache';
+import { mergeConversations } from '../utils/conversationUtils';
 import Loader from '../components/Loader';
 
 export const HomeDashboard = () => {
@@ -34,8 +35,11 @@ export const HomeDashboard = () => {
       ]);
       if (convRes.success) {
         const convList = convRes.conversations || [];
-        setConversations(convList);
-        cacheSet('dashboard_conversations', convList, 120);
+        setConversations((prev) => {
+          const merged = mergeConversations(prev, convList);
+          cacheSet('dashboard_conversations', merged, 120);
+          return merged;
+        });
       }
       if (reqRes.success) {
         const reqCount = reqRes.requests?.length || 0;

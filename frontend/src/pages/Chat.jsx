@@ -9,6 +9,7 @@ import { useToast } from '../context/ToastContext';
 import { chatService } from '../services/chatService';
 import { wsService } from '../services/websocketService';
 import { cacheGet, cacheSet } from '../utils/cache';
+import { mergeMessages } from '../utils/messageUtils';
 import Loader from '../components/Loader';
 
 export const Chat = () => {
@@ -33,71 +34,86 @@ export const Chat = () => {
   const typingTimeoutRef = useRef(null);
   const otherTypingTimeoutRef = useRef(null);
   const isNearBottomRef = useRef(true);
+  const activeConvIdRef = useRef(conversationId);
+  activeConvIdRef.current = conversationId;
 
   // 1. Load initial conversation details and message history
-  const loadInitialData = async () => {
-    if (!cacheGet(`conv_msgs_${conversationId}`)) {
-      setIsLoading(true);
-    }
-    try {
-      const [convRes, msgRes] = await Promise.all([
-        chatService.getConversationDetail(conversationId),
-        chatService.getMessages(conversationId, { limit: 50 }),
-      ]);
-
-      if (convRes.success) {
-        setConversation(convRes.conversation);
-        cacheSet(`conv_detail_${conversationId}`, convRes.conversation, 120);
-      }
-      if (msgRes.success) {
-        const msgs = msgRes.messages || [];
-        setMessages(msgs);
-        setHasMore(msgRes.has_more);
-        cacheSet(`conv_msgs_${conversationId}`, msgs, 60);
-      }
-    } catch (err) {
-      showToast(err.message || 'Failed to load conversation.', 'error');
-    } finally {
-      setIsLoading(false);
-      setTimeout(scrollToBottom, 100);
-    }
-  };
-
   useEffect(() => {
-    loadInitialData();
+    let isCurrent = true;
+    const currentId = conversationId;
+
+    // Immediately synchronize view with current conversation state/cache
+    const cachedConv = cacheGet(`conv_detail_${currentId}`);
+    const cachedMsgs = cacheGet(`conv_msgs_${currentId}`);
+    setConversation(cachedConv || null);
+    setMessages(cachedMsgs || []);
+    setIsLoading(!cachedMsgs);
+    setOtherUserTyping(false);
+    setInputText('');
 
     // Join conversation room via WebSocket
-    wsService.joinConversation(conversationId);
+    wsService.joinConversation(currentId);
+
+    const loadInitialData = async () => {
+      try {
+        const [convRes, msgRes] = await Promise.all([
+          chatService.getConversationDetail(currentId),
+          chatService.getMessages(currentId, { limit: 50 }),
+        ]);
+
+        if (!isCurrent || activeConvIdRef.current !== currentId) {
+          // Stale response from a previously active conversation: drop it
+          return;
+        }
+
+        if (convRes.success) {
+          setConversation(convRes.conversation);
+          cacheSet(`conv_detail_${currentId}`, convRes.conversation, 120);
+        }
+        if (msgRes.success) {
+          const msgs = msgRes.messages || [];
+          setMessages((prev) => {
+            if (!isCurrent || activeConvIdRef.current !== currentId) return prev;
+            const merged = mergeMessages(prev, msgs);
+            cacheSet(`conv_msgs_${currentId}`, merged, 60);
+            return merged;
+          });
+          setHasMore(msgRes.has_more);
+        }
+      } catch (err) {
+        if (!isCurrent || activeConvIdRef.current !== currentId) return;
+        showToast(err.message || 'Failed to load conversation.', 'error');
+      } finally {
+        if (isCurrent && activeConvIdRef.current === currentId) {
+          setIsLoading(false);
+          setTimeout(scrollToBottom, 100);
+        }
+      }
+    };
+
+    loadInitialData();
 
     // Listen for WebSocket connection status
     const unsubStatus = wsService.on('connection_status', (data) => {
       setIsWsConnected(data.isConnected);
-      if (data.isConnected) {
-        // Sync any missed messages after reconnect
-        syncMissedMessages();
+      if (data.isConnected && isCurrent && activeConvIdRef.current === currentId) {
+        syncMissedMessages(currentId);
       }
     });
 
     // Listen for incoming messages
     const unsubMsg = wsService.on('new_message', (data) => {
       const incomingMsg = data.message;
-      if (String(incomingMsg.conversation_id) === String(conversationId)) {
+      if (String(incomingMsg.conversation_id) === String(activeConvIdRef.current)) {
         setMessages((prev) => {
-          // Check if already in list (optimistic or duplicate)
-          const idx = prev.findIndex(
-            (m) => (m.client_message_id && m.client_message_id === incomingMsg.client_message_id) || m.id === incomingMsg.id
-          );
-          if (idx !== -1) {
-            const copy = [...prev];
-            copy[idx] = incomingMsg;
-            return copy;
-          }
-          return [...prev, incomingMsg];
+          const merged = mergeMessages(prev, [incomingMsg]);
+          cacheSet(`conv_msgs_${activeConvIdRef.current}`, merged, 60);
+          return merged;
         });
 
         // If message is from other user and we are looking at chat, mark seen
         if (incomingMsg.sender_profile_id !== profile?.profile_id) {
-          wsService.markSeen(conversationId);
+          wsService.markSeen(activeConvIdRef.current);
         }
 
         // Auto-scroll if user is near bottom
@@ -111,19 +127,29 @@ export const Chat = () => {
 
     // Listen for message ACK
     const unsubAck = wsService.on('message_ack', (data) => {
-      setMessages((prev) =>
-        prev.map((m) => {
+      setMessages((prev) => {
+        let changed = false;
+        const updated = prev.map((m) => {
           if (m.client_message_id === data.client_message_id) {
-            return { ...m, id: data.message_id, status: data.status };
+            changed = true;
+            return {
+              ...m,
+              id: data.message_id,
+              status: m.status === 'seen' ? 'seen' : data.status,
+            };
           }
           return m;
-        })
-      );
+        });
+        if (changed) {
+          cacheSet(`conv_msgs_${activeConvIdRef.current}`, updated, 60);
+        }
+        return updated;
+      });
     });
 
     // Listen for typing indicator
     const unsubTyping = wsService.on('typing_indicator', (data) => {
-      if (String(data.conversation_id) === String(conversationId)) {
+      if (String(data.conversation_id) === String(activeConvIdRef.current)) {
         setOtherUserTyping(data.is_typing);
         if (otherTypingTimeoutRef.current) clearTimeout(otherTypingTimeoutRef.current);
         if (data.is_typing) {
@@ -136,10 +162,21 @@ export const Chat = () => {
 
     // Listen for messages seen
     const unsubSeen = wsService.on('messages_seen', (data) => {
-      if (String(data.conversation_id) === String(conversationId)) {
-        setMessages((prev) =>
-          prev.map((m) => (m.sender_profile_id === profile?.profile_id ? { ...m, status: 'seen' } : m))
-        );
+      if (String(data.conversation_id) === String(activeConvIdRef.current)) {
+        setMessages((prev) => {
+          let changed = false;
+          const updated = prev.map((m) => {
+            if (m.sender_profile_id === profile?.profile_id && m.status !== 'seen') {
+              changed = true;
+              return { ...m, status: 'seen' };
+            }
+            return m;
+          });
+          if (changed) {
+            cacheSet(`conv_msgs_${activeConvIdRef.current}`, updated, 60);
+          }
+          return updated;
+        });
       }
     });
 
@@ -159,7 +196,8 @@ export const Chat = () => {
     });
 
     return () => {
-      wsService.leaveConversation(conversationId);
+      isCurrent = false;
+      wsService.leaveConversation(currentId);
       unsubStatus();
       unsubMsg();
       unsubAck();
@@ -172,18 +210,21 @@ export const Chat = () => {
   }, [conversationId]);
 
   // Sync missed messages
-  const syncMissedMessages = async () => {
+  const syncMissedMessages = async (targetId = conversationId) => {
     if (messages.length === 0) return;
-    const latestId = messages[messages.length - 1].id;
-    if (!latestId) return;
+    const realMsgs = messages.filter((m) => m.id && !String(m.id).startsWith('temp-'));
+    if (realMsgs.length === 0) return;
+    const latestId = Math.max(...realMsgs.map((m) => Number(m.id)));
+    if (!latestId || !isFinite(latestId)) return;
 
     try {
-      const res = await chatService.getMessages(conversationId, { since_id: latestId });
-      if (res.success && res.messages?.length > 0) {
+      const res = await chatService.getMessages(targetId, { since_id: latestId });
+      if (res.success && res.messages?.length > 0 && activeConvIdRef.current === targetId) {
         setMessages((prev) => {
-          const ids = new Set(prev.map((m) => m.id));
-          const newOnes = res.messages.filter((m) => !ids.has(m.id));
-          return [...prev, ...newOnes];
+          if (activeConvIdRef.current !== targetId) return prev;
+          const merged = mergeMessages(prev, res.messages);
+          cacheSet(`conv_msgs_${targetId}`, merged, 60);
+          return merged;
         });
         if (isNearBottomRef.current) setTimeout(scrollToBottom, 50);
       }
@@ -210,19 +251,32 @@ export const Chat = () => {
   };
 
   const loadOlderMessages = async () => {
+    const targetId = conversationId;
     if (messages.length === 0 || loadingOlder) return;
     setLoadingOlder(true);
-    const oldestId = messages[0].id;
+    const oldestMsg = messages.find((m) => m.id && !String(m.id).startsWith('temp-'));
+    if (!oldestMsg) {
+      setLoadingOlder(false);
+      return;
+    }
+    const oldestId = oldestMsg.id;
     try {
-      const res = await chatService.getMessages(conversationId, { before_id: oldestId, limit: 30 });
-      if (res.success) {
-        setMessages((prev) => [...(res.messages || []), ...prev]);
+      const res = await chatService.getMessages(targetId, { before_id: oldestId, limit: 30 });
+      if (res.success && activeConvIdRef.current === targetId) {
+        setMessages((prev) => {
+          if (activeConvIdRef.current !== targetId) return prev;
+          const merged = mergeMessages(prev, res.messages || []);
+          cacheSet(`conv_msgs_${targetId}`, merged, 60);
+          return merged;
+        });
         setHasMore(res.has_more);
       }
     } catch (err) {
       console.error('Failed to load older messages:', err);
     } finally {
-      setLoadingOlder(false);
+      if (activeConvIdRef.current === targetId) {
+        setLoadingOlder(false);
+      }
     }
   };
 
@@ -246,13 +300,14 @@ export const Chat = () => {
     const text = inputText.trim();
     if (!text) return;
 
+    const currentId = conversationId;
     const clientMsgId = `cli-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
     // Optimistic UI message
     const optimisticMsg = {
       id: `temp-${Date.now()}`,
       client_message_id: clientMsgId,
-      conversation_id: Number(conversationId),
+      conversation_id: Number(currentId),
       sender_profile_id: profile?.profile_id,
       sender_display_name: profile?.display_name,
       content: text,
@@ -260,22 +315,28 @@ export const Chat = () => {
       created_at: new Date().toISOString(),
     };
 
-    setMessages((prev) => [...prev, optimisticMsg]);
+    setMessages((prev) => {
+      const updated = [...prev, optimisticMsg];
+      cacheSet(`conv_msgs_${currentId}`, updated, 60);
+      return updated;
+    });
     setInputText('');
     setIsTyping(false);
-    wsService.sendTyping(conversationId, false);
+    wsService.sendTyping(currentId, false);
     setTimeout(scrollToBottom, 50);
 
     // Attempt sending via WebSocket
-    const sentWs = wsService.sendMessage(conversationId, text, clientMsgId);
+    const sentWs = wsService.sendMessage(currentId, text, clientMsgId);
     if (!sentWs) {
       // Fallback to REST API
       try {
-        const res = await chatService.sendMessage(conversationId, text, clientMsgId);
-        if (res.success) {
-          setMessages((prev) =>
-            prev.map((m) => (m.client_message_id === clientMsgId ? res.message : m))
-          );
+        const res = await chatService.sendMessage(currentId, text, clientMsgId);
+        if (res.success && activeConvIdRef.current === currentId) {
+          setMessages((prev) => {
+            const merged = mergeMessages(prev, [res.message]);
+            cacheSet(`conv_msgs_${currentId}`, merged, 60);
+            return merged;
+          });
         }
       } catch (err) {
         showToast(err.message || 'Failed to send message.', 'error');

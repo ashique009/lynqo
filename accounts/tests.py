@@ -471,3 +471,114 @@ class WebSocketMessagingTests(TransactionTestCase):
         await comm1.disconnect()
         await comm2.disconnect()
 
+
+class ChatReliabilityRegressionTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.user1 = User.objects.create(username="LYNQ-REG01", full_name="User Reg 1")
+        self.p1 = Profile.objects.create(user=self.user1, profile_id="LYNQ-REG01", display_name="User Reg 1")
+        self.s1 = ProfileSession.objects.create(user=self.user1, token="reg-token-1")
+
+        self.user2 = User.objects.create(username="LYNQ-REG02", full_name="User Reg 2")
+        self.p2 = Profile.objects.create(user=self.user2, profile_id="LYNQ-REG02", display_name="User Reg 2")
+        self.s2 = ProfileSession.objects.create(user=self.user2, token="reg-token-2")
+
+        ConnectRequest.objects.create(sender=self.user1, receiver=self.user2, status='accepted')
+        self.conv, _ = Conversation.get_or_create_between(self.user1, self.user2)
+
+    def test_message_list_ordering_with_identical_timestamps(self):
+        """Messages with identical created_at timestamps are deterministically sorted by id."""
+        from django.utils import timezone
+        fixed_time = timezone.now()
+        m1 = Message.objects.create(
+            conversation=self.conv,
+            sender=self.user1,
+            content="Message 1",
+            client_message_id="cli-reg-1",
+            status="sent",
+            created_at=fixed_time
+        )
+        m2 = Message.objects.create(
+            conversation=self.conv,
+            sender=self.user1,
+            content="Message 2",
+            client_message_id="cli-reg-2",
+            status="sent",
+            created_at=fixed_time
+        )
+
+        response = self.client.get(
+            f"/api/auth/conversations/{self.conv.id}/messages/",
+            HTTP_AUTHORIZATION=f"Bearer {self.s1.token}"
+        )
+        self.assertEqual(response.status_code, 200)
+        messages = response.json()['messages']
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(messages[0]['id'], m1.id)
+        self.assertEqual(messages[1]['id'], m2.id)
+
+    def test_message_list_view_updates_status_and_is_read_in_response(self):
+        """MessageListView returns updated status='seen' and is_read=True in response payload."""
+        msg = Message.objects.create(
+            conversation=self.conv,
+            sender=self.user1,
+            content="Hello unread message",
+            client_message_id="cli-unread-1",
+            status="sent",
+            is_read=False
+        )
+
+        # User 2 reads conversation
+        response = self.client.get(
+            f"/api/auth/conversations/{self.conv.id}/messages/",
+            HTTP_AUTHORIZATION=f"Bearer {self.s2.token}"
+        )
+        self.assertEqual(response.status_code, 200)
+        messages = response.json()['messages']
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]['id'], msg.id)
+        self.assertEqual(messages[0]['status'], 'seen')
+        self.assertTrue(messages[0]['is_read'])
+
+    def test_conversation_list_view_deterministic_last_message(self):
+        """ConversationListView selects correct latest message by ID when timestamps match."""
+        from django.utils import timezone
+        fixed_time = timezone.now()
+        m1 = Message.objects.create(
+            conversation=self.conv,
+            sender=self.user1,
+            content="Early message",
+            status="sent",
+            created_at=fixed_time
+        )
+        m2 = Message.objects.create(
+            conversation=self.conv,
+            sender=self.user1,
+            content="Latest message",
+            status="sent",
+            created_at=fixed_time
+        )
+
+        response = self.client.get(
+            "/api/auth/conversations/",
+            HTTP_AUTHORIZATION=f"Bearer {self.s1.token}"
+        )
+        self.assertEqual(response.status_code, 200)
+        convs = response.json()['conversations']
+        self.assertEqual(len(convs), 1)
+        self.assertEqual(convs[0]['last_message']['id'], m2.id)
+        self.assertEqual(convs[0]['last_message']['content'], "Latest message")
+
+    def test_profile_me_returns_404_when_user_has_no_profile(self):
+        """ProfileMeView returns 404 when authenticated user has no profile model."""
+        orphan_user = User.objects.create(username="orphan_user")
+        session = ProfileSession.objects.create(user=orphan_user, token="orphan-token")
+
+        response = self.client.get(
+            "/api/auth/profile/me/",
+            HTTP_AUTHORIZATION=f"Bearer {session.token}"
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertFalse(response.json()['success'])
+
+

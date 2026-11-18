@@ -1,7 +1,7 @@
 import React, { createContext, useState, useEffect, useContext } from 'react';
 import { profileService } from '../services/profileService';
 import { wsService } from '../services/websocketService';
-import { cacheInvalidate } from '../utils/cache';
+import { cacheInvalidate, setCacheUserScope } from '../utils/cache';
 
 const AuthContext = createContext(null);
 
@@ -29,12 +29,13 @@ export const AuthProvider = ({ children }) => {
       if (res.success && res.profile) {
         setProfile(res.profile);
         localStorage.setItem('lynqo_profile', JSON.stringify(res.profile));
+        setCacheUserScope(res.profile.profile_id);
         wsService.connect(authToken);
       } else {
         clearAuth();
       }
     } catch (err) {
-      if (err.status === 401 || err.status === 403) {
+      if (!err.status || (err.status >= 400 && err.status < 500)) {
         clearAuth();
       }
     } finally {
@@ -44,7 +45,7 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     if (token) {
-      // Connect WebSocket immediately using token to avoid cold connection latency
+      // Connect WebSocket using token to avoid cold connection latency (wsService prevents duplicates)
       wsService.connect(token);
       fetchCurrentProfile(token);
     } else {
@@ -55,6 +56,7 @@ export const AuthProvider = ({ children }) => {
   const clearAuth = () => {
     localStorage.removeItem('lynqo_token');
     localStorage.removeItem('lynqo_profile');
+    setCacheUserScope(null);
     cacheInvalidate();
     setToken(null);
     setProfile(null);
@@ -67,6 +69,8 @@ export const AuthProvider = ({ children }) => {
       const res = await profileService.createProfile(displayName, pictureFile);
       if (res.success) {
         const { token: newToken, profile: newProfile, recovery_code } = res;
+        cacheInvalidate();
+        setCacheUserScope(newProfile?.profile_id);
         localStorage.setItem('lynqo_token', newToken);
         localStorage.setItem('lynqo_profile', JSON.stringify(newProfile));
         setToken(newToken);
@@ -88,6 +92,8 @@ export const AuthProvider = ({ children }) => {
       const res = await profileService.recoverProfile(recoveryCode);
       if (res.success) {
         const { token: newToken, profile: recoveredProfile, new_recovery_code } = res;
+        cacheInvalidate();
+        setCacheUserScope(recoveredProfile?.profile_id);
         localStorage.setItem('lynqo_token', newToken);
         localStorage.setItem('lynqo_profile', JSON.stringify(recoveredProfile));
         setToken(newToken);
@@ -109,6 +115,7 @@ export const AuthProvider = ({ children }) => {
       if (res.success && res.profile) {
         setProfile(res.profile);
         localStorage.setItem('lynqo_profile', JSON.stringify(res.profile));
+        setCacheUserScope(res.profile.profile_id);
         return { success: true, profile: res.profile };
       }
       return { success: false, message: res.message || 'Failed to update profile' };

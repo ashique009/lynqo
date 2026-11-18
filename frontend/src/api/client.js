@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { cacheInvalidate } from '../utils/cache';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || (
   typeof window !== 'undefined' && window.location.origin.includes(':5173')
@@ -33,9 +34,10 @@ client.interceptors.response.use(
   },
   (error) => {
     const originalRequest = error.config;
-    if (error.response && error.response.status === 401 && !originalRequest?._retry) {
+    if (error.response && (error.response.status === 401 || error.response.status === 403) && !originalRequest?._retry) {
       localStorage.removeItem('lynqo_token');
       localStorage.removeItem('lynqo_profile');
+      cacheInvalidate();
       if (
         typeof window !== 'undefined' &&
         window.location.pathname !== '/' &&
