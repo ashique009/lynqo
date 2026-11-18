@@ -582,3 +582,143 @@ class ChatReliabilityRegressionTests(TestCase):
         self.assertFalse(response.json()['success'])
 
 
+class VoiceMessagingTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.user1 = User.objects.create(username="LYNQ-VOICE01", full_name="Voice User 1")
+        self.p1 = Profile.objects.create(user=self.user1, profile_id="LYNQ-VOICE01", display_name="Voice User 1")
+        self.s1 = ProfileSession.objects.create(user=self.user1, token="voice-token-1")
+
+        self.user2 = User.objects.create(username="LYNQ-VOICE02", full_name="Voice User 2")
+        self.p2 = Profile.objects.create(user=self.user2, profile_id="LYNQ-VOICE02", display_name="Voice User 2")
+        self.s2 = ProfileSession.objects.create(user=self.user2, token="voice-token-2")
+
+        # Third party user not in conversation
+        self.user3 = User.objects.create(username="LYNQ-VOICE03", full_name="Voice User 3")
+        self.p3 = Profile.objects.create(user=self.user3, profile_id="LYNQ-VOICE03", display_name="Voice User 3")
+        self.s3 = ProfileSession.objects.create(user=self.user3, token="voice-token-3")
+
+        ConnectRequest.objects.create(sender=self.user1, receiver=self.user2, status='accepted')
+        self.conv, _ = Conversation.get_or_create_between(self.user1, self.user2)
+
+        # Standard minimal WAV bytes (44 bytes valid header)
+        self.wav_bytes = b'RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00D\xac\x00\x00\x88X\x01\x00\x02\x00\x10\x00data\x00\x00\x00\x00'
+
+    def test_voice_message_upload_success(self):
+        """User uploads voice message, verifies metadata and audio url."""
+        audio_file = SimpleUploadedFile("test_voice.wav", self.wav_bytes, content_type="audio/wav")
+        response = self.client.post(
+            f"/api/auth/conversations/{self.conv.id}/messages/voice/",
+            {
+                'audio': audio_file,
+                'duration': 15,
+                'client_message_id': 'cli-voice-001'
+            },
+            HTTP_AUTHORIZATION=f"Bearer {self.s1.token}"
+        )
+        self.assertEqual(response.status_code, 201)
+        data = response.json()
+        self.assertTrue(data['success'])
+        msg = data['message']
+        self.assertEqual(msg['message_type'], 'voice')
+        self.assertEqual(msg['duration_seconds'], 15)
+        self.assertEqual(msg['client_message_id'], 'cli-voice-001')
+        self.assertTrue(msg['audio_url'].startswith(f"/api/auth/conversations/{self.conv.id}/messages/"))
+
+    def test_voice_message_upload_deduplication(self):
+        """Uploading voice message with existing client_message_id returns deduplicated message."""
+        audio_file1 = SimpleUploadedFile("test1.wav", self.wav_bytes, content_type="audio/wav")
+        res1 = self.client.post(
+            f"/api/auth/conversations/{self.conv.id}/messages/voice/",
+            {'audio': audio_file1, 'duration': 10, 'client_message_id': 'cli-dedup-voice'},
+            HTTP_AUTHORIZATION=f"Bearer {self.s1.token}"
+        )
+        self.assertEqual(res1.status_code, 201)
+
+        audio_file2 = SimpleUploadedFile("test2.wav", self.wav_bytes, content_type="audio/wav")
+        res2 = self.client.post(
+            f"/api/auth/conversations/{self.conv.id}/messages/voice/",
+            {'audio': audio_file2, 'duration': 10, 'client_message_id': 'cli-dedup-voice'},
+            HTTP_AUTHORIZATION=f"Bearer {self.s1.token}"
+        )
+        self.assertEqual(res2.status_code, 200)
+        self.assertTrue(res2.json().get('deduplicated'))
+        self.assertEqual(res1.json()['message']['id'], res2.json()['message']['id'])
+
+    def test_voice_message_duration_limit_enforced(self):
+        """Voice messages exceeding 2 minutes limit are rejected."""
+        audio_file = SimpleUploadedFile("test.wav", self.wav_bytes, content_type="audio/wav")
+        response = self.client.post(
+            f"/api/auth/conversations/{self.conv.id}/messages/voice/",
+            {'audio': audio_file, 'duration': 180},
+            HTTP_AUTHORIZATION=f"Bearer {self.s1.token}"
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("exceeds 2 minutes", response.json()['message'])
+
+    def test_voice_message_file_size_limit_enforced(self):
+        """Audio files exceeding 10MB limit are rejected."""
+        large_bytes = b'0' * (11 * 1024 * 1024)
+        audio_file = SimpleUploadedFile("huge.wav", large_bytes, content_type="audio/wav")
+        response = self.client.post(
+            f"/api/auth/conversations/{self.conv.id}/messages/voice/",
+            {'audio': audio_file, 'duration': 30},
+            HTTP_AUTHORIZATION=f"Bearer {self.s1.token}"
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("10MB", response.json()['message'])
+
+    def test_voice_message_unsupported_format_rejected(self):
+        """Non-audio file is rejected."""
+        fake_file = SimpleUploadedFile("malicious.exe", b"MZ\x90\x00this is not audio", content_type="application/octet-stream")
+        response = self.client.post(
+            f"/api/auth/conversations/{self.conv.id}/messages/voice/",
+            {'audio': fake_file, 'duration': 10},
+            HTTP_AUTHORIZATION=f"Bearer {self.s1.token}"
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Unsupported", response.json()['message'])
+
+    def test_voice_message_unauthorized_upload_denied(self):
+        """Non-participant cannot upload audio to another user's conversation."""
+        audio_file = SimpleUploadedFile("test.wav", self.wav_bytes, content_type="audio/wav")
+        response = self.client.post(
+            f"/api/auth/conversations/{self.conv.id}/messages/voice/",
+            {'audio': audio_file, 'duration': 10},
+            HTTP_AUTHORIZATION=f"Bearer {self.s3.token}"
+        )
+        self.assertEqual(response.status_code, 403)
+
+    def test_voice_message_audio_retrieval_authorized_and_unauthorized(self):
+        """Participants can retrieve voice message audio; third parties receive 403 Forbidden."""
+        audio_file = SimpleUploadedFile("test_retrieve.wav", self.wav_bytes, content_type="audio/wav")
+        res_upload = self.client.post(
+            f"/api/auth/conversations/{self.conv.id}/messages/voice/",
+            {'audio': audio_file, 'duration': 8},
+            HTTP_AUTHORIZATION=f"Bearer {self.s1.token}"
+        )
+        msg_id = res_upload.json()['message']['id']
+
+        # 1. Sender (User 1) can retrieve
+        res_auth1 = self.client.get(
+            f"/api/auth/conversations/{self.conv.id}/messages/{msg_id}/audio/",
+            HTTP_AUTHORIZATION=f"Bearer {self.s1.token}"
+        )
+        self.assertEqual(res_auth1.status_code, 200)
+
+        # 2. Recipient (User 2) can retrieve
+        res_auth2 = self.client.get(
+            f"/api/auth/conversations/{self.conv.id}/messages/{msg_id}/audio/",
+            HTTP_AUTHORIZATION=f"Bearer {self.s2.token}"
+        )
+        self.assertEqual(res_auth2.status_code, 200)
+
+        # 3. Unauthorized third party (User 3) receives 403 Forbidden
+        res_unauth = self.client.get(
+            f"/api/auth/conversations/{self.conv.id}/messages/{msg_id}/audio/",
+            HTTP_AUTHORIZATION=f"Bearer {self.s3.token}"
+        )
+        self.assertEqual(res_unauth.status_code, 403)
+
+
+

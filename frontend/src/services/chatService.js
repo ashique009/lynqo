@@ -24,6 +24,28 @@ export const chatService = {
       client_message_id: clientMessageId || `web-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
     });
   },
+
+  async sendVoiceMessage(conversationId, audioBlob, durationSeconds, clientMessageId = null) {
+    const formData = new FormData();
+    const mime = audioBlob.type || 'audio/webm';
+    let ext = 'webm';
+    if (mime.includes('mp4') || mime.includes('m4a') || mime.includes('aac')) ext = 'mp4';
+    else if (mime.includes('ogg')) ext = 'ogg';
+    else if (mime.includes('wav')) ext = 'wav';
+
+    const filename = `recording_${Date.now()}.${ext}`;
+    formData.append('audio', audioBlob, filename);
+    formData.append('duration', String(Math.round(durationSeconds) || 1));
+    if (clientMessageId) {
+      formData.append('client_message_id', clientMessageId);
+    }
+
+    return client.post(`/api/auth/conversations/${conversationId}/messages/voice/`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+    });
+  },
 };
 
 export default chatService;

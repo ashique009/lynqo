@@ -92,15 +92,18 @@ class MessageSerializer(serializers.ModelSerializer):
     sender_profile_id = serializers.SerializerMethodField()
     sender_display_name = serializers.SerializerMethodField()
     client_message_id = serializers.CharField(required=False, allow_null=True)
+    audio_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Message
         fields = [
             'id', 'client_message_id', 'conversation_id',
             'sender_profile_id', 'sender_display_name',
-            'content', 'status', 'is_read', 'created_at'
+            'content', 'message_type', 'audio_url', 'duration_seconds',
+            'file_size', 'audio_format',
+            'status', 'is_read', 'created_at'
         ]
-        read_only_fields = ['id', 'status', 'is_read', 'created_at']
+        read_only_fields = ['id', 'status', 'is_read', 'created_at', 'audio_url']
 
     def get_sender_profile_id(self, obj):
         profile = getattr(obj.sender, 'profile', None)
@@ -109,6 +112,11 @@ class MessageSerializer(serializers.ModelSerializer):
     def get_sender_display_name(self, obj):
         profile = getattr(obj.sender, 'profile', None)
         return profile.display_name if profile else obj.sender.username
+
+    def get_audio_url(self, obj):
+        if obj.message_type == 'voice' and (obj.audio_file or obj.audio_storage_id):
+            return f"/api/auth/conversations/{obj.conversation_id}/messages/{obj.id}/audio/"
+        return None
 
 
 class ConversationSerializer(serializers.ModelSerializer):

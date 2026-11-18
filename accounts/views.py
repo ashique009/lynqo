@@ -1,9 +1,11 @@
 import secrets
+import time
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
 from django.contrib.auth.hashers import make_password, check_password
 from django.db import transaction, models
+from django.http import FileResponse, HttpResponseRedirect
 from django.utils import timezone
 from rest_framework import permissions, status
 from rest_framework.response import Response
@@ -764,3 +766,210 @@ class SendMessageView(APIView):
             'success': True,
             'message': msg_data,
         }, status=status.HTTP_201_CREATED)
+
+
+ALLOWED_AUDIO_MIMES = {
+    'audio/webm': 'webm',
+    'audio/webm;codecs=opus': 'webm',
+    'audio/ogg': 'ogg',
+    'audio/ogg;codecs=opus': 'ogg',
+    'audio/mp4': 'mp4',
+    'audio/m4a': 'm4a',
+    'audio/x-m4a': 'm4a',
+    'audio/aac': 'aac',
+    'audio/wav': 'wav',
+    'audio/x-wav': 'wav',
+    'audio/wave': 'wav',
+    'audio/mpeg': 'mp3',
+    'audio/mp3': 'mp3',
+}
+
+
+def detect_audio_extension(file_obj, content_type):
+    clean_ct = (content_type or '').split(';')[0].strip().lower()
+    ext = ALLOWED_AUDIO_MIMES.get(clean_ct)
+    if not ext:
+        ext = ALLOWED_AUDIO_MIMES.get((content_type or '').strip().lower())
+
+    header = file_obj.read(32)
+    file_obj.seek(0)
+
+    # Magic byte inspection
+    if header.startswith(b'\x1aE\xdf\xa3'):
+        return 'webm', 'audio/webm'
+    elif header.startswith(b'OggS'):
+        return 'ogg', 'audio/ogg'
+    elif header.startswith(b'RIFF') and b'WAVE' in header[8:16]:
+        return 'wav', 'audio/wav'
+    elif b'ftyp' in header[4:12]:
+        return 'mp4', 'audio/mp4'
+    elif header.startswith(b'ID3') or (len(header) >= 2 and header[0] == 0xFF and (header[1] & 0xE0) == 0xE0):
+        return 'mp3', 'audio/mpeg'
+
+    if ext:
+        return ext, clean_ct or 'audio/webm'
+
+    return None, None
+
+
+class VoiceMessageUploadView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, conversation_id):
+        try:
+            conv = Conversation.objects.select_related('participant_1', 'participant_2').get(id=conversation_id)
+        except Conversation.DoesNotExist:
+            return Response({'success': False, 'message': 'Conversation not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if conv.participant_1_id != request.user.id and conv.participant_2_id != request.user.id:
+            return Response({'success': False, 'message': 'Unauthorized.'}, status=status.HTTP_403_FORBIDDEN)
+
+        other_user = conv.get_other_participant(request.user)
+
+        # Verify connection status
+        is_connected = ConnectRequest.objects.filter(
+            (models.Q(sender=request.user, receiver=other_user) | models.Q(sender=other_user, receiver=request.user)),
+            status='accepted'
+        ).exists()
+
+        if not is_connected:
+            return Response(
+                {'success': False, 'message': 'You can only message accepted connections.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        audio_file = request.FILES.get('audio') or request.FILES.get('voice_file')
+        if not audio_file:
+            return Response({'success': False, 'message': 'Audio file is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 10 MB maximum file size limit
+        if audio_file.size > 10 * 1024 * 1024:
+            return Response({'success': False, 'message': 'Audio file exceeds 10MB limit.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Duration limit: maximum 120 seconds (2 minutes)
+        raw_duration = request.data.get('duration') or request.data.get('duration_seconds') or 0
+        try:
+            duration_val = float(raw_duration)
+        except (ValueError, TypeError):
+            duration_val = 0.0
+
+        if duration_val > 125:
+            return Response({'success': False, 'message': 'Voice message exceeds 2 minutes limit.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        duration_sec = max(1, min(int(round(duration_val)), 120)) if duration_val > 0 else 1
+
+        # Format detection
+        ext, mime = detect_audio_extension(audio_file, audio_file.content_type)
+        if not ext:
+            return Response({'success': False, 'message': 'Unsupported or invalid audio format.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        client_msg_id = request.data.get('client_message_id')
+        if client_msg_id:
+            existing = Message.objects.filter(
+                conversation=conv,
+                sender=request.user,
+                client_message_id=client_msg_id
+            ).first()
+            if existing:
+                return Response({
+                    'success': True,
+                    'message': MessageSerializer(existing, context={'request': request}).data,
+                    'deduplicated': True,
+                })
+
+        safe_filename = f"voice_{conv.id}_{secrets.token_hex(16)}.{ext}"
+
+        with transaction.atomic():
+            msg = Message(
+                conversation=conv,
+                sender=request.user,
+                client_message_id=client_msg_id,
+                message_type='voice',
+                duration_seconds=duration_sec,
+                file_size=audio_file.size,
+                audio_format=ext,
+                status='sent'
+            )
+            msg.audio_file.save(safe_filename, audio_file, save=False)
+            msg.audio_storage_id = msg.audio_file.name
+            msg.save()
+
+            conv.updated_at = msg.created_at
+            conv.save(update_fields=['updated_at'])
+
+        msg_data = MessageSerializer(msg, context={'request': request}).data
+
+        # Broadcast via WebSocket
+        channel_layer = get_channel_layer()
+        if channel_layer:
+            async_to_sync(channel_layer.group_send)(
+                f"conv_{conv.id}",
+                {
+                    'type': 'broadcast_new_message',
+                    'message': msg_data,
+                }
+            )
+            async_to_sync(channel_layer.group_send)(
+                f"user_{other_user.id}",
+                {
+                    'type': 'broadcast_conversation_update',
+                    'conversation_id': conv.id,
+                    'message': msg_data,
+                }
+            )
+
+        return Response({
+            'success': True,
+            'message': msg_data,
+        }, status=status.HTTP_201_CREATED)
+
+
+class VoiceMessageAudioView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, conversation_id, message_id):
+        try:
+            conv = Conversation.objects.get(id=conversation_id)
+        except Conversation.DoesNotExist:
+            return Response({'success': False, 'message': 'Conversation not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if conv.participant_1_id != request.user.id and conv.participant_2_id != request.user.id:
+            return Response({'success': False, 'message': 'Unauthorized.'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            msg = Message.objects.get(id=message_id, conversation=conv, message_type='voice')
+        except Message.DoesNotExist:
+            return Response({'success': False, 'message': 'Voice message not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not msg.audio_file:
+            return Response({'success': False, 'message': 'Audio file not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        c_cloud = getattr(settings, 'CLOUDINARY_CLOUD_NAME', None)
+        c_key = getattr(settings, 'CLOUDINARY_API_KEY', None)
+        c_secret = getattr(settings, 'CLOUDINARY_API_SECRET', None)
+
+        ext = msg.audio_format or 'webm'
+        content_type = f"audio/{ext}"
+
+        if c_cloud and c_key and c_secret:
+            import cloudinary.utils
+            signed_url, _ = cloudinary.utils.cloudinary_url(
+                msg.audio_storage_id or msg.audio_file.name,
+                resource_type='video',
+                sign_url=True,
+                type='authenticated',
+                expires_at=int(time.time()) + 300
+            )
+            if request.query_params.get('json') == '1':
+                return Response({'success': True, 'audio_url': signed_url})
+            return HttpResponseRedirect(signed_url)
+
+        try:
+            file_handle = msg.audio_file.open('rb')
+            response = FileResponse(file_handle, content_type=content_type)
+            response['Content-Disposition'] = f'inline; filename="{msg.audio_file.name}"'
+            return response
+        except Exception:
+            return Response({'success': False, 'message': 'Error opening audio file.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+

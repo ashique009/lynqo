@@ -39,6 +39,10 @@ def create_image(name="test.png"):
     buf.seek(0)
     return SimpleUploadedFile(name, buf.read(), content_type="image/png")
 
+def create_audio_file(name="voice.webm", content_type="audio/webm", size=1024):
+    content = b'\x1a\x45\xdf\xa3' + (b'\x00' * max(0, size - 4))
+    return SimpleUploadedFile(name, content, content_type=content_type)
+
 async def run_e2e_verification():
     print("=" * 70)
     print("STARTING LYNQO TWO-USER END-TO-END VERIFICATION")
@@ -136,11 +140,12 @@ async def run_e2e_verification():
     print("  ✓ User A WebSocket connected (online presence broadcast)")
     print("  ✓ User B WebSocket connected (online presence broadcast)")
 
-    async def get_next_type(comm, expected_types, timeout=4):
+    async def get_next_type(comm, expected_types, timeout=4, predicate=None):
         while True:
             msg = await comm.receive_json_from(timeout=timeout)
             if msg.get('type') in expected_types:
-                return msg
+                if predicate is None or predicate(msg):
+                    return msg
 
     # Join conversation room
     await ws_a.send_json_to({'type': 'join_conversation', 'conversation_id': conv_id})
@@ -185,6 +190,53 @@ async def run_e2e_verification():
     assert msg_received_a['message']['content'] == 'Awesome Alice! Super fast and reliable!'
     print(f"  ✓ User A received reply over WebSocket: \"{msg_received_a['message']['content']}\"")
 
+    # 9.5. User A records and uploads voice message; User B receives real-time voice event
+    print("\n[Step 9.5] User A sends voice message; User B receives real-time voice message...")
+    audio_file_a = create_audio_file("alice_voice.webm", content_type="audio/webm", size=2048)
+    
+    @sync_to_async
+    def send_voice_a():
+        return client_a.post(f'/api/auth/conversations/{conv_id}/messages/voice/', {
+            'audio': audio_file_a,
+            'duration': '4.8',
+            'client_message_id': 'voice-client-a-01',
+        })
+
+    res_voice_a = await send_voice_a()
+    assert res_voice_a.status_code == 201, f"Voice upload failed: {res_voice_a.status_code} {res_voice_a.content}"
+    voice_msg_data = res_voice_a.json()['message']
+    assert voice_msg_data['message_type'] == 'voice'
+    assert voice_msg_data['duration_seconds'] == 5
+    assert voice_msg_data['audio_url'].endswith(f"/messages/{voice_msg_data['id']}/audio/")
+    voice_msg_id = voice_msg_data['id']
+    print(f"  ✓ User A uploaded voice message (ID: {voice_msg_id}, duration: {voice_msg_data['duration_seconds']}s)")
+
+    # User B receives voice message over WebSocket
+    voice_ws_b = await get_next_type(ws_b, ['new_message'], predicate=lambda m: m.get('message', {}).get('message_type') == 'voice')
+    assert voice_ws_b['message']['message_type'] == 'voice'
+    assert voice_ws_b['message']['id'] == voice_msg_id
+    assert voice_ws_b['message']['duration_seconds'] == 5
+    print(f"  ✓ User B received voice message over WebSocket: audio_url={voice_ws_b['message']['audio_url']}")
+
+    # Idempotent re-send check: same client_message_id
+    audio_file_dup = create_audio_file("alice_voice_dup.webm", content_type="audio/webm", size=2048)
+    @sync_to_async
+    def send_voice_dup():
+        return client_a.post(f'/api/auth/conversations/{conv_id}/messages/voice/', {
+            'audio': audio_file_dup,
+            'duration': '4.8',
+            'client_message_id': 'voice-client-a-01',
+        })
+    res_dup = await send_voice_dup()
+    assert res_dup.status_code == 200
+    assert res_dup.json().get('deduplicated') is True
+    print("  ✓ Idempotency verified: re-sending with identical client_message_id deduplicated safely")
+
+    # User B streams audio file
+    res_audio_b = await sync_to_async(client_b.get)(f'/api/auth/conversations/{conv_id}/messages/{voice_msg_id}/audio/')
+    assert res_audio_b.status_code in [200, 302], f"User B audio access failed: {res_audio_b.status_code}"
+    print("  ✓ User B authorized to access voice message audio stream")
+
     # Close sockets cleanly
     await ws_a.disconnect()
     await ws_b.disconnect()
@@ -206,10 +258,12 @@ async def run_e2e_verification():
     res_history = await sync_to_async(client_a.get)(f'/api/auth/conversations/{conv_id}/messages/')
     assert res_history.status_code == 200
     history_messages = res_history.json()['messages']
-    assert len(history_messages) == 2
+    assert len(history_messages) == 3
     assert history_messages[0]['content'] == 'Hey Bob! Real-time chat works seamlessly!'
     assert history_messages[1]['content'] == 'Awesome Alice! Super fast and reliable!'
-    print(f"  ✓ {len(history_messages)} messages persisted in PostgreSQL and retrieved in chronological order")
+    assert history_messages[2]['message_type'] == 'voice'
+    assert history_messages[2]['duration_seconds'] == 5
+    print(f"  ✓ {len(history_messages)} messages (text + voice) persisted in PostgreSQL and retrieved in chronological order")
 
     # 12. Security Test: Unauthorized Third Party (User C)
     print("\n[Step 12] Security Test: Unauthorized third party attempts access...")
@@ -221,13 +275,25 @@ async def run_e2e_verification():
         res_snoop_send = client_c.post(f'/api/auth/conversations/{conv_id}/messages/send/', data=json.dumps({
             'content': 'I am snooping!'
         }), content_type='application/json')
-        return res_snoop.status_code, res_snoop_send.status_code
+        # Attacker tries to download Alice's voice note
+        res_snoop_voice_audio = client_c.get(f'/api/auth/conversations/{conv_id}/messages/{voice_msg_id}/audio/')
+        # Attacker tries to upload voice to Alice & Bob's conversation
+        audio_attack = create_audio_file("attacker.webm")
+        res_snoop_voice_upload = client_c.post(f'/api/auth/conversations/{conv_id}/messages/voice/', {
+            'audio': audio_attack,
+            'duration': '3.0'
+        })
+        return res_snoop.status_code, res_snoop_send.status_code, res_snoop_voice_audio.status_code, res_snoop_voice_upload.status_code
 
-    snoop_read_status, snoop_send_status = await run_snoop()
+    snoop_read_status, snoop_send_status, snoop_voice_audio_status, snoop_voice_upload_status = await run_snoop()
     assert snoop_read_status == 403, f"Expected 403, got {snoop_read_status}"
     assert snoop_send_status == 403, f"Expected 403, got {snoop_send_status}"
-    print("  ✓ Unauthorized third party read rejected: 403 Forbidden")
-    print("  ✓ Unauthorized third party send rejected: 403 Forbidden")
+    assert snoop_voice_audio_status == 403, f"Expected 403, got {snoop_voice_audio_status}"
+    assert snoop_voice_upload_status == 403, f"Expected 403, got {snoop_voice_upload_status}"
+    print("  ✓ Unauthorized third party message read rejected: 403 Forbidden")
+    print("  ✓ Unauthorized third party message send rejected: 403 Forbidden")
+    print("  ✓ Unauthorized third party voice audio download rejected: 403 Forbidden")
+    print("  ✓ Unauthorized third party voice upload rejected: 403 Forbidden")
 
     # 13. Profile Recovery with Single-Use Code Rotation
     print("\n[Step 13] Profile Recovery: User A loses browser session and recovers...")

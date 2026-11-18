@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   MessageSquare, UserPlus, Users, Search, Copy, Check,
-  Sparkles, CheckCheck, Clock, UserCheck
+  Sparkles, CheckCheck, Clock, UserCheck, Mic
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -292,9 +292,20 @@ export const HomeDashboard = () => {
                       </span>
                     </div>
 
-                    <p className="text-xs text-slate-400 truncate mt-0.5 max-w-xs sm:max-w-md">
-                      {conv.last_message?.content || 'No messages yet'}
-                    </p>
+                    <div className="text-xs text-slate-400 truncate mt-0.5 max-w-xs sm:max-w-md">
+                      {conv.last_message ? (
+                        conv.last_message.message_type === 'voice' ? (
+                          <span className="inline-flex items-center gap-1.5 text-pink-400 font-medium">
+                            <Mic className="w-3.5 h-3.5 shrink-0" />
+                            <span>Voice message {conv.last_message.duration_seconds ? `(${conv.last_message.duration_seconds}s)` : ''}</span>
+                          </span>
+                        ) : (
+                          conv.last_message.content || 'No messages yet'
+                        )
+                      ) : (
+                        'No messages yet'
+                      )}
+                    </div>
                   </div>
                 </div>
 
