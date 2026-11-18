@@ -89,44 +89,43 @@ async def run_e2e_verification():
     recovery_code_b = data_b['recovery_code']
     print(f"  ✓ User B created: {data_b['profile']['display_name']} ({profile_id_b})")
 
-    # 3. User A searches for User B by profile ID
-    print(f"\n[Step 3] User A searches for User B by ID '{profile_id_b}'...")
-    res_search = await sync_to_async(client_a.get)(f'/api/auth/profiles/search/?profile_id={profile_id_b}')
-    assert res_search.status_code == 200
-    search_data = res_search.json()
-    assert search_data['profile']['display_name'] == 'Bob Martin'
-    assert search_data['connection_status'] == 'none'
-    print(f"  ✓ Search found: {search_data['profile']['display_name']}, status: {search_data['connection_status']}")
+    # 3. User A searches for User B by profile ID and by display name
+    print(f"\n[Step 3] User A searches for User B by ID '{profile_id_b}' and by display name...")
+    res_search_id = await sync_to_async(client_a.get)(f'/api/auth/profiles/search/?profile_id={profile_id_b}')
+    assert res_search_id.status_code == 200
+    search_id_data = res_search_id.json()
+    assert search_id_data['profile']['display_name'] == 'Bob Martin'
+    print(f"  ✓ Search by ID found: {search_id_data['profile']['display_name']}")
 
-    # 4. User A sends connection request to User B
-    print("\n[Step 4] User A sends connection request to User B...")
+    res_search_name = await sync_to_async(client_a.get)('/api/auth/profiles/search/?query=Martin')
+    assert res_search_name.status_code == 200
+    search_name_data = res_search_name.json()
+    assert len(search_name_data['profiles']) >= 1
+    assert any(p['profile_id'] == profile_id_b for p in search_name_data['profiles'])
+    print(f"  ✓ Search by name found Bob Martin ({profile_id_b}) among results")
+
+    # 4. User A starts direct conversation without friend request or approval
+    print("\n[Step 4] User A starts direct conversation with User B without friend request/approval...")
     @sync_to_async
-    def send_request():
-        return client_a.post('/api/auth/connections/request/', data=json.dumps({
+    def start_direct_conversation():
+        return client_a.post('/api/auth/conversations/', data=json.dumps({
             'profile_id': profile_id_b,
-            'reason': 'be_friends'
         }), content_type='application/json')
 
-    res_req = await send_request()
-    assert res_req.status_code == 201
-    req_id = res_req.json()['request']['id']
-    print(f"  ✓ Connection request sent (ID: {req_id})")
+    res_conv = await start_direct_conversation()
+    assert res_conv.status_code == 201
+    conv_data = res_conv.json()
+    conv_id = conv_data['conversation']['id']
+    assert conv_data['created'] is True
+    print(f"  ✓ Direct conversation created immediately (Conversation ID: {conv_id})")
 
-    # 5. User B views incoming requests
-    print("\n[Step 5] User B checks incoming connection requests...")
-    res_in = await sync_to_async(client_b.get)('/api/auth/connections/requests/incoming/')
-    assert res_in.status_code == 200
-    incoming_list = res_in.json()['requests']
-    assert len(incoming_list) >= 1
-    assert incoming_list[0]['sender']['profile_id'] == profile_id_a
-    print(f"  ✓ Incoming request from: {incoming_list[0]['sender']['display_name']} ({profile_id_a})")
-
-    # 6. User B accepts the request
-    print("\n[Step 6] User B accepts connection request...")
-    res_accept = await sync_to_async(client_b.post)(f'/api/auth/connections/requests/{req_id}/accept/')
-    assert res_accept.status_code == 200
-    conv_id = res_accept.json()['conversation_id']
-    print(f"  ✓ Request accepted! Active Conversation ID: {conv_id}")
+    # 5. Deduplication check: repeated conversation initiation reuses existing conversation
+    print("\n[Step 5] Deduplication check: repeated conversation creation reuses existing record...")
+    res_conv_dup = await start_direct_conversation()
+    assert res_conv_dup.status_code == 200
+    assert res_conv_dup.json()['conversation']['id'] == conv_id
+    assert res_conv_dup.json()['created'] is False
+    print(f"  ✓ Idempotency verified: re-initiating conversation returns existing ID {conv_id}")
 
     # 7. Real-Time WebSockets: User A and User B connect
     print("\n[Step 7] Establishing real-time WebSocket channels for User A and User B...")

@@ -254,10 +254,12 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
 
     @database_sync_to_async
     def get_contact_ids(self):
-        # Contacts are users with accepted ConnectRequests
-        sent = ConnectRequest.objects.filter(sender=self.user, status='accepted').values_list('receiver_id', flat=True)
-        received = ConnectRequest.objects.filter(receiver=self.user, status='accepted').values_list('sender_id', flat=True)
-        return list(set(list(sent) + list(received)))
+        # Contacts are users sharing active conversations with self.user (and any legacy accepted requests)
+        p1_ids = list(Conversation.objects.filter(participant_2=self.user).values_list('participant_1_id', flat=True))
+        p2_ids = list(Conversation.objects.filter(participant_1=self.user).values_list('participant_2_id', flat=True))
+        sent = list(ConnectRequest.objects.filter(sender=self.user, status='accepted').values_list('receiver_id', flat=True))
+        received = list(ConnectRequest.objects.filter(receiver=self.user, status='accepted').values_list('sender_id', flat=True))
+        return list(set(p1_ids + p2_ids + sent + received))
 
     async def broadcast_presence(self, is_online):
         contact_ids = await self.get_contact_ids()
@@ -294,14 +296,8 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
 
         other_user = conv.get_other_participant(self.user)
 
-        # Check if an accepted connection exists
-        is_connected = ConnectRequest.objects.filter(
-            (models_q(sender=self.user, receiver=other_user) | models_q(sender=other_user, receiver=self.user)),
-            status='accepted'
-        ).exists()
-
-        if not is_connected:
-            return False, None, "You can only message accepted connections."
+        if getattr(self.user, 'is_banned', False) or getattr(other_user, 'is_banned', False):
+            return False, None, "Account restricted."
 
         return True, other_user.id, None
 

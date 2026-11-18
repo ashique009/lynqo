@@ -1,8 +1,9 @@
 import client from '../api/client';
 
 export const connectService = {
-  async searchProfile(profileId) {
-    return client.get(`/api/auth/profiles/search/?profile_id=${encodeURIComponent(profileId)}`);
+  async searchProfile(query) {
+    const q = encodeURIComponent(query.trim());
+    return client.get(`/api/auth/profiles/search/?query=${q}&profile_id=${q}`);
   },
 
   async sendConnectRequest(profileId, reason = 'be_friends') {

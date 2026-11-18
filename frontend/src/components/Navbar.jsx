@@ -12,30 +12,8 @@ export const Navbar = () => {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [pendingCount, setPendingCount] = useState(0);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
-
-  const fetchPending = async () => {
-    try {
-      const res = await connectService.getIncomingRequests();
-      if (res.success) {
-        setPendingCount(res.requests?.length || 0);
-      }
-    } catch {
-      // Ignore background errors
-    }
-  };
-
-  useEffect(() => {
-    if (profile) {
-      fetchPending();
-      const unsub = wsService.on('connection_event', () => {
-        fetchPending();
-      });
-      return () => unsub();
-    }
-  }, [profile]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -77,18 +55,6 @@ export const Navbar = () => {
           title="Find Profile"
         >
           <UserPlus className="w-5 h-5" />
-        </Link>
-
-        {/* Requests Notification Bell */}
-        <Link
-          to="/requests"
-          className="relative p-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-          title="Connection Requests"
-        >
-          <Bell className="w-5 h-5" />
-          {pendingCount > 0 && (
-            <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-pink-500 rounded-full animate-pulse" />
-          )}
         </Link>
 
         {/* User Avatar & Dropdown */}

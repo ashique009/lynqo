@@ -29,10 +29,7 @@ export const HomeDashboard = () => {
       setIsLoading(true);
     }
     try {
-      const [convRes, reqRes] = await Promise.all([
-        chatService.getConversations(),
-        connectService.getIncomingRequests(),
-      ]);
+      const convRes = await chatService.getConversations();
       if (convRes.success) {
         const convList = convRes.conversations || [];
         setConversations((prev) => {
@@ -40,11 +37,6 @@ export const HomeDashboard = () => {
           cacheSet('dashboard_conversations', merged, 120);
           return merged;
         });
-      }
-      if (reqRes.success) {
-        const reqCount = reqRes.requests?.length || 0;
-        setPendingRequestsCount(reqCount);
-        cacheSet('dashboard_pending_count', reqCount, 120);
       }
     } catch (err) {
       console.error('Failed to load dashboard data:', err);
@@ -185,19 +177,7 @@ export const HomeDashboard = () => {
             className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 text-white text-xs font-bold shadow-md shadow-pink-500/20 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
           >
             <UserPlus className="w-4 h-4" />
-            <span>Find Friend</span>
-          </Link>
-          <Link
-            to="/requests"
-            className="relative px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer"
-          >
-            <UserCheck className="w-4 h-4" />
-            <span className="hidden sm:inline">Requests</span>
-            {pendingRequestsCount > 0 && (
-              <span className="w-5 h-5 rounded-full bg-pink-500 text-white text-[10px] font-bold flex items-center justify-center">
-                {pendingRequestsCount}
-              </span>
-            )}
+            <span>Find & Message</span>
           </Link>
         </div>
       </div>

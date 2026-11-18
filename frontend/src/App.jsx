@@ -77,7 +77,7 @@ function App() {
                   <Route path="/dashboard" element={<HomeDashboard />} />
                   <Route path="/find" element={<FindProfile />} />
                   <Route path="/connect/:profileId" element={<FindProfile />} />
-                  <Route path="/requests" element={<ConnectRequests />} />
+                  <Route path="/requests" element={<Navigate to="/find" replace />} />
                   <Route path="/connections" element={<ConnectedProfiles />} />
                   <Route path="/conversations" element={<Navigate to="/dashboard" replace />} />
                   <Route path="/chat/:conversationId" element={<Chat />} />

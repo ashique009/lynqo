@@ -5,6 +5,10 @@ export const chatService = {
     return client.get('/api/auth/conversations/');
   },
 
+  async startConversation(profileId) {
+    return client.post('/api/auth/conversations/', { profile_id: profileId });
+  },
+
   async getConversationDetail(conversationId) {
     return client.get(`/api/auth/conversations/${conversationId}/`);
   },

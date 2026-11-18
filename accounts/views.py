@@ -257,55 +257,87 @@ class ProfileSearchView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        query = (request.query_params.get('profile_id') or '').strip().upper()
+        query = (
+            request.query_params.get('query') or
+            request.query_params.get('q') or
+            request.query_params.get('profile_id') or
+            request.query_params.get('name') or
+            ''
+        ).strip()
         if not query:
             return Response(
-                {'success': False, 'message': 'profile_id parameter is required.'},
+                {'success': False, 'message': 'Search query parameter is required.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         current_profile = getattr(request.user, 'profile', None)
-        if current_profile and current_profile.profile_id == query:
+        upper_query = query.upper()
+        if current_profile and (current_profile.profile_id == upper_query or current_profile.display_name.lower() == query.lower()):
             return Response(
                 {'success': False, 'message': 'You cannot search for your own profile ID.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        target_profile = Profile.objects.select_related('user').filter(profile_id=query).first()
-        if not target_profile:
+        # 1. Check exact profile_id match first
+        exact_profile = Profile.objects.select_related('user').exclude(user=request.user).filter(profile_id=upper_query).first()
+        if exact_profile:
+            conv = Conversation.objects.filter(
+                (models.Q(participant_1=request.user, participant_2=exact_profile.user) |
+                 models.Q(participant_1=exact_profile.user, participant_2=request.user))
+            ).first()
+
+            status_val = 'connected' if conv else 'none'
+            conv_id = conv.id if conv else None
+
+            prof_data = ProfilePublicSerializer(exact_profile).data
+            prof_data['conversation_id'] = conv_id
+
+            return Response({
+                'success': True,
+                'profile': prof_data,
+                'profiles': [prof_data],
+                'connection_status': status_val,
+                'request_id': None,
+                'conversation_id': conv_id,
+            })
+
+        # 2. Search by display name or partial profile_id
+        matches = list(Profile.objects.select_related('user').exclude(user=request.user).filter(
+            models.Q(display_name__icontains=query) |
+            models.Q(profile_id__icontains=upper_query)
+        ).order_by('-id')[:25])
+
+        if not matches:
             return Response(
-                {'success': False, 'message': f"No profile found with ID '{query}'."},
+                {'success': False, 'message': f"No profile found with ID or name '{query}'."},
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Check relationship status
-        req = ConnectRequest.objects.filter(
-            (models.Q(sender=request.user, receiver=target_profile.user) |
-             models.Q(sender=target_profile.user, receiver=request.user))
-        ).order_by('-created_at').first()
+        # Fetch conversation IDs for all matches in one query
+        match_user_ids = [p.user.id for p in matches]
+        convs = Conversation.objects.filter(
+            (models.Q(participant_1=request.user, participant_2_id__in=match_user_ids) |
+             models.Q(participant_2=request.user, participant_1_id__in=match_user_ids))
+        )
+        conv_map = {}
+        for c in convs:
+            other_id = c.participant_2_id if c.participant_1_id == request.user.id else c.participant_1_id
+            conv_map[other_id] = c.id
 
-        status_val = 'none'
-        request_id = None
-        conv_id = None
+        results = []
+        for p in matches:
+            p_data = ProfilePublicSerializer(p).data
+            p_data['conversation_id'] = conv_map.get(p.user.id)
+            results.append(p_data)
 
-        if req:
-            if req.status == 'accepted':
-                status_val = 'connected'
-                conv, _ = Conversation.get_or_create_between(request.user, target_profile.user)
-                conv_id = conv.id
-            elif req.status == 'pending':
-                if req.sender_id == request.user.id:
-                    status_val = 'pending_sent'
-                else:
-                    status_val = 'pending_received'
-                request_id = req.id
-
+        first_conv = results[0].get('conversation_id') if results else None
         return Response({
             'success': True,
-            'profile': ProfilePublicSerializer(target_profile).data,
-            'connection_status': status_val,
-            'request_id': request_id,
-            'conversation_id': conv_id,
+            'profile': results[0] if len(results) == 1 else None,
+            'profiles': results,
+            'connection_status': 'connected' if first_conv else 'none',
+            'request_id': None,
+            'conversation_id': first_conv,
         })
 
 
@@ -516,47 +548,37 @@ class ConnectedProfilesView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        # All users with whom current_user has accepted ConnectRequest
-        reqs = ConnectRequest.objects.filter(
+        # All users with whom current_user has active conversations or accepted requests
+        convs = Conversation.objects.filter(
+            models.Q(participant_1=request.user) | models.Q(participant_2=request.user)
+        ).select_related('participant_1__profile', 'participant_2__profile')
+
+        user_map = {}
+        for c in convs:
+            other_user = c.participant_2 if c.participant_1_id == request.user.id else c.participant_1
+            user_map[other_user.id] = {
+                'profile': ProfilePublicSerializer(getattr(other_user, 'profile', None)).data,
+                'conversation_id': c.id,
+                'connected_since': c.created_at.isoformat(),
+            }
+
+        # Also include legacy accepted requests if any
+        legacy_reqs = ConnectRequest.objects.filter(
             (models.Q(sender=request.user) | models.Q(receiver=request.user)),
             status='accepted'
-        ).select_related('sender__profile__user', 'receiver__profile__user')
+        ).select_related('sender__profile', 'receiver__profile')
 
-        other_users = []
-        seen_user_ids = set()
-        user_req_map = {}
-
-        for req in reqs:
+        for req in legacy_reqs:
             other_user = req.receiver if req.sender_id == request.user.id else req.sender
-            if other_user.id in seen_user_ids:
-                continue
-            seen_user_ids.add(other_user.id)
-            other_users.append(other_user)
-            user_req_map[other_user.id] = req
-
-        # Fetch existing conversations in a single query instead of running queries in a loop
-        existing_convs = Conversation.objects.filter(
-            models.Q(participant_1=request.user) | models.Q(participant_2=request.user)
-        )
-        conv_map = {}
-        for c in existing_convs:
-            other_id = c.participant_2_id if c.participant_1_id == request.user.id else c.participant_1_id
-            conv_map[other_id] = c.id
-
-        connections = []
-        for other_user in other_users:
-            conv_id = conv_map.get(other_user.id)
-            if not conv_id:
+            if other_user.id not in user_map:
                 conv, _ = Conversation.get_or_create_between(request.user, other_user)
-                conv_id = conv.id
-                conv_map[other_user.id] = conv_id
+                user_map[other_user.id] = {
+                    'profile': ProfilePublicSerializer(getattr(other_user, 'profile', None)).data,
+                    'conversation_id': conv.id,
+                    'connected_since': req.updated_at.isoformat(),
+                }
 
-            connections.append({
-                'profile': ProfilePublicSerializer(getattr(other_user, 'profile', None)).data,
-                'conversation_id': conv_id,
-                'connected_since': user_req_map[other_user.id].updated_at.isoformat(),
-            })
-
+        connections = list(user_map.values())
         return Response({'success': True, 'connections': connections})
 
 
@@ -597,6 +619,51 @@ class ConversationListView(APIView):
 
         serializer = ConversationSerializer(convs, many=True, context={'request': request})
         return Response({'success': True, 'conversations': serializer.data})
+
+    def post(self, request):
+        target_profile_id = (
+            request.data.get('profile_id') or
+            request.data.get('participant_profile_id') or
+            request.data.get('target_profile_id') or
+            ''
+        ).strip().upper()
+        target_user_id = request.data.get('user_id')
+
+        target_user = None
+        if target_profile_id:
+            profile = Profile.objects.select_related('user').filter(profile_id=target_profile_id).first()
+            if profile:
+                target_user = profile.user
+        elif target_user_id:
+            target_user = User.objects.filter(id=target_user_id).first()
+
+        if not target_user:
+            return Response(
+                {'success': False, 'message': 'Target user or profile not found.'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if target_user.id == request.user.id:
+            return Response(
+                {'success': False, 'message': 'You cannot start a conversation with yourself.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if getattr(target_user, 'is_banned', False):
+            return Response(
+                {'success': False, 'message': 'Cannot start a conversation with this account.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        with transaction.atomic():
+            conv, created = Conversation.get_or_create_between(request.user, target_user)
+
+        serializer = ConversationSerializer(conv, context={'request': request})
+        return Response({
+            'success': True,
+            'conversation': serializer.data,
+            'created': created
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 
 class ConversationDetailView(APIView):
@@ -699,17 +766,8 @@ class SendMessageView(APIView):
 
         other_user = conv.get_other_participant(request.user)
 
-        # Verify connection status
-        is_connected = ConnectRequest.objects.filter(
-            (models.Q(sender=request.user, receiver=other_user) | models.Q(sender=other_user, receiver=request.user)),
-            status='accepted'
-        ).exists()
-
-        if not is_connected:
-            return Response(
-                {'success': False, 'message': 'You can only message accepted connections.'},
-                status=status.HTTP_403_FORBIDDEN
-            )
+        if getattr(request.user, 'is_banned', False) or getattr(other_user, 'is_banned', False):
+            return Response({'success': False, 'message': 'Account restricted.'}, status=status.HTTP_403_FORBIDDEN)
 
         content = (request.data.get('content') or '').strip()
         client_msg_id = request.data.get('client_message_id')
@@ -828,17 +886,8 @@ class VoiceMessageUploadView(APIView):
 
         other_user = conv.get_other_participant(request.user)
 
-        # Verify connection status
-        is_connected = ConnectRequest.objects.filter(
-            (models.Q(sender=request.user, receiver=other_user) | models.Q(sender=other_user, receiver=request.user)),
-            status='accepted'
-        ).exists()
-
-        if not is_connected:
-            return Response(
-                {'success': False, 'message': 'You can only message accepted connections.'},
-                status=status.HTTP_403_FORBIDDEN
-            )
+        if getattr(request.user, 'is_banned', False) or getattr(other_user, 'is_banned', False):
+            return Response({'success': False, 'message': 'Account restricted.'}, status=status.HTTP_403_FORBIDDEN)
 
         audio_file = request.FILES.get('audio') or request.FILES.get('voice_file')
         if not audio_file:

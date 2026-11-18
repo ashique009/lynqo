@@ -792,5 +792,110 @@ class MessagePerformanceAndReliabilityTests(TestCase):
         self.assertEqual(Message.objects.filter(client_message_id=client_msg_id).count(), 1)
 
 
+class DirectMessagingAndSearchTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        # Create Alice
+        r_a = self.client.post('/api/auth/profile/create/', {'display_name': 'Alice Springs'})
+        self.token_a = r_a.json()['token']
+        self.profile_a = r_a.json()['profile']
+
+        # Create Bob
+        r_b = self.client.post('/api/auth/profile/create/', {'display_name': 'Bob Dylan'})
+        self.token_b = r_b.json()['token']
+        self.profile_b = r_b.json()['profile']
+
+        # Create Charlie
+        r_c = self.client.post('/api/auth/profile/create/', {'display_name': 'Charlie Chaplin'})
+        self.token_c = r_c.json()['token']
+        self.profile_c = r_c.json()['profile']
+
+    def test_search_by_display_name_and_profile_id(self):
+        """Users can search by display name substring or exact Profile ID."""
+        # Search by display name
+        res_name = self.client.get(
+            '/api/auth/profiles/search/?query=Dylan',
+            HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+        )
+        self.assertEqual(res_name.status_code, 200)
+        data_name = res_name.json()
+        self.assertTrue(data_name['success'])
+        self.assertGreaterEqual(len(data_name['profiles']), 1)
+        self.assertEqual(data_name['profiles'][0]['display_name'], 'Bob Dylan')
+
+        # Search by exact profile ID
+        res_id = self.client.get(
+            f"/api/auth/profiles/search/?profile_id={self.profile_b['profile_id']}",
+            HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+        )
+        self.assertEqual(res_id.status_code, 200)
+        data_id = res_id.json()
+        self.assertEqual(data_id['profile']['profile_id'], self.profile_b['profile_id'])
+
+    def test_start_conversation_and_direct_message_without_approval(self):
+        """User A can start a conversation with User B and message directly without friend request."""
+        # 1. Alice initiates conversation with Bob directly
+        res_conv = self.client.post(
+            '/api/auth/conversations/',
+            data=json.dumps({'profile_id': self.profile_b['profile_id']}),
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+        )
+        self.assertEqual(res_conv.status_code, 201)
+        conv_id = res_conv.json()['conversation']['id']
+        self.assertTrue(res_conv.json()['created'])
+
+        # 2. Alice sends text message directly — no friend request or approval required!
+        res_msg = self.client.post(
+            f"/api/auth/conversations/{conv_id}/messages/send/",
+            data=json.dumps({
+                'content': 'Hello Bob! Direct messaging works!',
+                'client_message_id': 'direct-msg-001'
+            }),
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+        )
+        self.assertEqual(res_msg.status_code, 201)
+        self.assertEqual(res_msg.json()['message']['content'], 'Hello Bob! Direct messaging works!')
+
+        # 3. Bob sends a reply directly
+        res_reply = self.client.post(
+            f"/api/auth/conversations/{conv_id}/messages/send/",
+            data=json.dumps({
+                'content': 'Awesome Alice, glad to chat!',
+                'client_message_id': 'direct-reply-002'
+            }),
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f"Bearer {self.token_b}"
+        )
+        self.assertEqual(res_reply.status_code, 201)
+
+        # 4. Repeated initiation reuses the existing conversation
+        res_dup = self.client.post(
+            '/api/auth/conversations/',
+            data=json.dumps({'profile_id': self.profile_b['profile_id']}),
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+        )
+        self.assertEqual(res_dup.status_code, 200)
+        self.assertEqual(res_dup.json()['conversation']['id'], conv_id)
+        self.assertFalse(res_dup.json()['created'])
+
+        # 5. Database has exactly 1 conversation
+        self.assertEqual(Conversation.objects.count(), 1)
+
+    def test_prevent_conversation_with_self(self):
+        """User cannot initiate a conversation with their own profile ID."""
+        res = self.client.post(
+            '/api/auth/conversations/',
+            data=json.dumps({'profile_id': self.profile_a['profile_id']}),
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(res.json()['success'])
+
+
+
 
 

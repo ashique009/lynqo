@@ -17,8 +17,7 @@ export const Sidebar = () => {
 
   const menuItems = [
     { name: 'Chats', path: '/dashboard', icon: MessageSquare },
-    { name: 'Find Friend', path: '/find', icon: UserPlus },
-    { name: 'Requests', path: '/requests', icon: UserCheck },
+    { name: 'Find People', path: '/find', icon: UserPlus },
     { name: 'Connections', path: '/connections', icon: Users },
     { name: 'Settings', path: '/settings', icon: Settings },
   ];

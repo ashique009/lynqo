@@ -1,37 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { MessageSquare, UserPlus, UserCheck, Users, Settings } from 'lucide-react';
-import { connectService } from '../services/connectService';
-import { wsService } from '../services/websocketService';
-import { useAuth } from '../context/AuthContext';
+import { MessageSquare, UserPlus, Users, Settings } from 'lucide-react';
 
 export const BottomNavigation = () => {
-  const { profile } = useAuth();
-  const [pendingCount, setPendingCount] = useState(0);
-
-  const fetchPending = async () => {
-    try {
-      const res = await connectService.getIncomingRequests();
-      if (res.success) {
-        setPendingCount(res.requests?.length || 0);
-      }
-    } catch {
-      // Ignore background errors
-    }
-  };
-
-  useEffect(() => {
-    if (profile) {
-      fetchPending();
-      const unsub = wsService.on('connection_event', () => fetchPending());
-      return () => unsub();
-    }
-  }, [profile]);
-
   const navItems = [
     { name: 'Chats', path: '/dashboard', icon: MessageSquare },
     { name: 'Find', path: '/find', icon: UserPlus },
-    { name: 'Requests', path: '/requests', icon: UserCheck, badge: pendingCount },
     { name: 'Friends', path: '/connections', icon: Users },
     { name: 'Settings', path: '/settings', icon: Settings },
   ];
@@ -52,9 +26,6 @@ export const BottomNavigation = () => {
           >
             <div className="relative">
               <Icon className="w-5 h-5" />
-              {item.badge > 0 && (
-                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-pink-500 rounded-full" />
-              )}
             </div>
             <span>{item.name}</span>
           </NavLink>
