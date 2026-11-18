@@ -1,4 +1,4 @@
-const STATUS_PRIORITY = { sending: 1, sent: 2, delivered: 3, seen: 4 };
+const STATUS_PRIORITY = { sending: 1, failed: 2, sent: 3, delivered: 4, seen: 5 };
 
 export const mergeMessages = (existingMessages = [], incomingMessages = []) => {
   const mergedMap = new Map();

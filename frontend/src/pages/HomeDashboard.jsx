@@ -261,7 +261,10 @@ export const HomeDashboard = () => {
             {filteredConversations.map((conv) => (
               <div
                 key={conv.id}
-                onClick={() => navigate(`/chat/${conv.id}`)}
+                onClick={() => {
+                  cacheSet(`conv_detail_${conv.id}`, conv, 120);
+                  navigate(`/chat/${conv.id}`, { state: { conversation: conv } });
+                }}
                 className="p-4 rounded-2xl bg-slate-900/80 hover:bg-slate-800/80 border border-slate-800/80 hover:border-slate-700/80 transition-all cursor-pointer flex items-center justify-between gap-4 backdrop-blur-sm group"
               >
                 <div className="flex items-center gap-3.5 min-w-0">

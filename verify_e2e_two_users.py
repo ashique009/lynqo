@@ -170,7 +170,20 @@ async def run_e2e_verification():
     msg_received_b = await get_next_type(ws_b, ['new_message'])
     assert msg_received_b['message']['content'] == 'Hey Bob! Real-time chat works seamlessly!'
     assert msg_received_b['message']['sender_profile_id'] == profile_id_a
+    msg_a_id = msg_received_b['message']['id']
     print(f"  ✓ User B received over WebSocket: \"{msg_received_b['message']['content']}\"")
+
+    # Delivery acknowledgement: User B acknowledges receipt of User A's message
+    await ws_b.send_json_to({'type': 'mark_delivered', 'conversation_id': conv_id, 'message_ids': [msg_a_id]})
+    deliv_event_a = await get_next_type(ws_a, ['messages_delivered'])
+    assert msg_a_id in deliv_event_a['message_ids']
+    print(f"  ✓ User A received confirmed delivery receipt: status -> delivered")
+
+    # Seen acknowledgement: User B marks messages seen
+    await ws_b.send_json_to({'type': 'mark_seen', 'conversation_id': conv_id})
+    seen_event_a = await get_next_type(ws_a, ['messages_seen'])
+    assert seen_event_a['conversation_id'] == conv_id
+    print(f"  ✓ User A received confirmed seen receipt: status -> seen")
 
     # 9. User B types and sends reply
     print("\n[Step 9] User B types and sends reply...")

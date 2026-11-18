@@ -88,7 +88,7 @@ class ConnectRequestSerializer(serializers.ModelSerializer):
 
 
 class MessageSerializer(serializers.ModelSerializer):
-    conversation_id = serializers.IntegerField(source='conversation.id', read_only=True)
+    conversation_id = serializers.IntegerField(read_only=True)
     sender_profile_id = serializers.SerializerMethodField()
     sender_display_name = serializers.SerializerMethodField()
     client_message_id = serializers.CharField(required=False, allow_null=True)

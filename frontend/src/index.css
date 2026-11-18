@@ -154,3 +154,17 @@ html.dark ::-webkit-scrollbar-thumb:hover {
 html.dark * {
   scrollbar-color: rgba(124, 58, 237, 0.25) rgba(5, 5, 8, 0.5);
 }
+
+/* Safe Area insets for modern mobile displays (iOS notch & home indicator) */
+.pt-safe {
+  padding-top: max(0.5rem, env(safe-area-inset-top, 0px));
+}
+.pb-safe {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
+}
+.pl-safe {
+  padding-left: max(0.5rem, env(safe-area-inset-left, 0px));
+}
+.pr-safe {
+  padding-right: max(0.5rem, env(safe-area-inset-right, 0px));
+}

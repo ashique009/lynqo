@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   ArrowLeft, Send, Check, CheckCheck, Clock,
-  ChevronDown, WifiOff, AlertCircle, Mic, Lock, Trash2, Pause, Play
+  ChevronDown, WifiOff, AlertCircle, Mic, Lock, Trash2, Pause, Play, RefreshCw
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -23,16 +23,43 @@ const formatRecordingTime = (sec) => {
   return `${m}:${s < 10 ? '0' : ''}${s}`;
 };
 
+const ChatSkeleton = () => (
+  <div className="space-y-4 p-2 animate-pulse" role="status" aria-label="Loading messages">
+    <div className="flex flex-col items-start space-y-1">
+      <div className="h-10 w-44 sm:w-52 rounded-2xl rounded-bl-xs bg-slate-800/70 border border-slate-700/40" />
+      <div className="h-3 w-14 bg-slate-800/40 rounded-full ml-1" />
+    </div>
+    <div className="flex flex-col items-end space-y-1">
+      <div className="h-12 w-52 sm:w-64 rounded-2xl rounded-br-xs bg-gradient-to-r from-pink-500/20 to-indigo-600/20 border border-pink-500/10" />
+      <div className="h-3 w-12 bg-slate-800/40 rounded-full mr-1" />
+    </div>
+    <div className="flex flex-col items-start space-y-1">
+      <div className="h-14 w-60 sm:w-72 rounded-2xl rounded-bl-xs bg-slate-800/70 border border-slate-700/40" />
+      <div className="h-3 w-16 bg-slate-800/40 rounded-full ml-1" />
+    </div>
+    <div className="flex flex-col items-end space-y-1">
+      <div className="h-10 w-36 sm:w-44 rounded-2xl rounded-br-xs bg-gradient-to-r from-pink-500/20 to-indigo-600/20 border border-pink-500/10" />
+      <div className="h-3 w-12 bg-slate-800/40 rounded-full mr-1" />
+    </div>
+  </div>
+);
+
 export const Chat = () => {
   const { conversationId } = useParams();
+  const location = useLocation();
   const { profile } = useAuth();
   const { showToast } = useToast();
   const navigate = useNavigate();
 
-  const [conversation, setConversation] = useState(() => cacheGet(`conv_detail_${conversationId}`) || null);
+  const [conversation, setConversation] = useState(() => {
+    return location.state?.conversation || cacheGet(`conv_detail_${conversationId}`) || null;
+  });
   const [messages, setMessages] = useState(() => cacheGet(`conv_msgs_${conversationId}`) || []);
   const [inputText, setInputText] = useState('');
-  const [isLoading, setIsLoading] = useState(() => !cacheGet(`conv_msgs_${conversationId}`));
+  const [isLoading, setIsLoading] = useState(() => {
+    const cached = cacheGet(`conv_msgs_${conversationId}`);
+    return !cached || cached.length === 0;
+  });
   const [isTyping, setIsTyping] = useState(false);
   const [otherUserTyping, setOtherUserTyping] = useState(false);
   const [hasMore, setHasMore] = useState(false);
@@ -67,10 +94,13 @@ export const Chat = () => {
 
     const loadInitialData = async () => {
       try {
-        const [convRes, msgRes] = await Promise.all([
-          chatService.getConversationDetail(currentId),
-          chatService.getMessages(currentId, { limit: 50 }),
-        ]);
+        const cachedConvData = location.state?.conversation || cacheGet(`conv_detail_${currentId}`);
+        const msgPromise = chatService.getMessages(currentId, { limit: 50 });
+        const convPromise = cachedConvData
+          ? Promise.resolve({ success: true, conversation: cachedConvData })
+          : chatService.getConversationDetail(currentId);
+
+        const [convRes, msgRes] = await Promise.all([convPromise, msgPromise]);
 
         if (!isCurrent || activeConvIdRef.current !== currentId) {
           // Stale response from a previously active conversation: drop it
@@ -90,6 +120,12 @@ export const Chat = () => {
             return merged;
           });
           setHasMore(msgRes.has_more);
+
+          // Acknowledge delivered for incoming unread messages
+          const incomingUnread = msgs.filter((m) => m.sender_profile_id !== profile?.profile_id && m.status === 'sent');
+          if (incomingUnread.length > 0) {
+            wsService.markDelivered(currentId, incomingUnread.map((m) => m.id));
+          }
         }
       } catch (err) {
         if (!isCurrent || activeConvIdRef.current !== currentId) return;
@@ -97,7 +133,7 @@ export const Chat = () => {
       } finally {
         if (isCurrent && activeConvIdRef.current === currentId) {
           setIsLoading(false);
-          setTimeout(scrollToBottom, 100);
+          setTimeout(scrollToBottom, 40);
         }
       }
     };
@@ -122,8 +158,9 @@ export const Chat = () => {
           return merged;
         });
 
-        // If message is from other user and we are looking at chat, mark seen
+        // If message is from other user and we are looking at chat, acknowledge delivery and seen
         if (incomingMsg.sender_profile_id !== profile?.profile_id) {
+          wsService.markDelivered(activeConvIdRef.current, [incomingMsg.id]);
           wsService.markSeen(activeConvIdRef.current);
         }
 
@@ -146,7 +183,7 @@ export const Chat = () => {
             return {
               ...m,
               id: data.message_id,
-              status: m.status === 'seen' ? 'seen' : data.status,
+              status: m.status === 'seen' ? 'seen' : m.status === 'delivered' ? 'delivered' : data.status,
             };
           }
           return m;
@@ -156,6 +193,27 @@ export const Chat = () => {
         }
         return updated;
       });
+    });
+
+    // Listen for messages delivered
+    const unsubDelivered = wsService.on('messages_delivered', (data) => {
+      if (String(data.conversation_id) === String(activeConvIdRef.current)) {
+        const idSet = new Set(data.message_ids);
+        setMessages((prev) => {
+          let changed = false;
+          const updated = prev.map((m) => {
+            if (m.id && idSet.has(m.id) && m.status === 'sent') {
+              changed = true;
+              return { ...m, status: 'delivered' };
+            }
+            return m;
+          });
+          if (changed) {
+            cacheSet(`conv_msgs_${activeConvIdRef.current}`, updated, 60);
+          }
+          return updated;
+        });
+      }
     });
 
     // Listen for typing indicator
@@ -213,6 +271,7 @@ export const Chat = () => {
       unsubStatus();
       unsubMsg();
       unsubAck();
+      unsubDelivered();
       unsubTyping();
       unsubSeen();
       unsubPresence();
@@ -238,15 +297,15 @@ export const Chat = () => {
           cacheSet(`conv_msgs_${targetId}`, merged, 60);
           return merged;
         });
-        if (isNearBottomRef.current) setTimeout(scrollToBottom, 50);
+        if (isNearBottomRef.current) setTimeout(() => scrollToBottom('smooth'), 50);
       }
     } catch (e) {
       console.warn('Sync missed messages failed:', e);
     }
   };
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  const scrollToBottom = (behavior = 'auto') => {
+    messagesEndRef.current?.scrollIntoView({ behavior });
     setShowScrollBottom(false);
   };
 
@@ -256,7 +315,7 @@ export const Chat = () => {
     isNearBottomRef.current = fromBottom < 100;
     setShowScrollBottom(fromBottom >= 150);
 
-    // If scrolled to top, load older messages
+    // If scrolled near top, load older messages
     if (scrollTop < 50 && hasMore && !loadingOlder) {
       loadOlderMessages();
     }
@@ -265,6 +324,8 @@ export const Chat = () => {
   const loadOlderMessages = async () => {
     const targetId = conversationId;
     if (messages.length === 0 || loadingOlder) return;
+    const container = chatContainerRef.current;
+    const oldScrollHeight = container ? container.scrollHeight : 0;
     setLoadingOlder(true);
     const oldestMsg = messages.find((m) => m.id && !String(m.id).startsWith('temp-'));
     if (!oldestMsg) {
@@ -282,6 +343,14 @@ export const Chat = () => {
           return merged;
         });
         setHasMore(res.has_more);
+
+        // Keep reading position steady without layout jumping
+        requestAnimationFrame(() => {
+          if (container) {
+            const newScrollHeight = container.scrollHeight;
+            container.scrollTop = newScrollHeight - oldScrollHeight;
+          }
+        });
       }
     } catch (err) {
       console.error('Failed to load older messages:', err);
@@ -315,7 +384,7 @@ export const Chat = () => {
     const currentId = conversationId;
     const clientMsgId = `cli-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
-    // Optimistic UI message
+    // Optimistic UI message rendered immediately
     const optimisticMsg = {
       id: `temp-${Date.now()}`,
       client_message_id: clientMsgId,
@@ -335,7 +404,7 @@ export const Chat = () => {
     setInputText('');
     setIsTyping(false);
     wsService.sendTyping(currentId, false);
-    setTimeout(scrollToBottom, 50);
+    setTimeout(() => scrollToBottom('smooth'), 40);
 
     // Attempt sending via WebSocket
     const sentWs = wsService.sendMessage(currentId, text, clientMsgId);
@@ -351,7 +420,66 @@ export const Chat = () => {
           });
         }
       } catch (err) {
-        showToast(err.message || 'Failed to send message.', 'error');
+        setMessages((prev) => {
+          const updated = prev.map((m) =>
+            m.client_message_id === clientMsgId ? { ...m, status: 'failed' } : m
+          );
+          cacheSet(`conv_msgs_${currentId}`, updated, 60);
+          return updated;
+        });
+        showToast(err.message || 'Failed to send message. Tap Retry.', 'error');
+      }
+    } else {
+      // Timeout fallback: if neither ACK nor delivery arrive within 8s, mark as failed
+      setTimeout(() => {
+        setMessages((prev) => {
+          const target = prev.find((m) => m.client_message_id === clientMsgId);
+          if (target && target.status === 'sending') {
+            const updated = prev.map((m) =>
+              m.client_message_id === clientMsgId ? { ...m, status: 'failed' } : m
+            );
+            cacheSet(`conv_msgs_${currentId}`, updated, 60);
+            return updated;
+          }
+          return prev;
+        });
+      }, 8000);
+    }
+  };
+
+  const handleRetry = async (failedMsg) => {
+    if (!failedMsg || !failedMsg.client_message_id) return;
+    const currentId = conversationId;
+
+    // Set back to sending state
+    setMessages((prev) => {
+      const updated = prev.map((m) =>
+        m.client_message_id === failedMsg.client_message_id ? { ...m, status: 'sending' } : m
+      );
+      cacheSet(`conv_msgs_${currentId}`, updated, 60);
+      return updated;
+    });
+
+    const sentWs = wsService.sendMessage(currentId, failedMsg.content, failedMsg.client_message_id);
+    if (!sentWs) {
+      try {
+        const res = await chatService.sendMessage(currentId, failedMsg.content, failedMsg.client_message_id);
+        if (res.success && activeConvIdRef.current === currentId) {
+          setMessages((prev) => {
+            const merged = mergeMessages(prev, [res.message]);
+            cacheSet(`conv_msgs_${currentId}`, merged, 60);
+            return merged;
+          });
+        }
+      } catch (err) {
+        setMessages((prev) => {
+          const updated = prev.map((m) =>
+            m.client_message_id === failedMsg.client_message_id ? { ...m, status: 'failed' } : m
+          );
+          cacheSet(`conv_msgs_${currentId}`, updated, 60);
+          return updated;
+        });
+        showToast('Retry failed. Please check your connection.', 'error');
       }
     }
   };
@@ -433,22 +561,23 @@ export const Chat = () => {
   const otherUser = conversation?.other_participant;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-8rem)] max-w-4xl mx-auto rounded-3xl bg-slate-900/90 border border-slate-800 shadow-2xl overflow-hidden backdrop-blur-xl">
+    <div className="flex flex-col h-full md:h-[calc(100vh-8rem)] w-full max-w-4xl mx-auto md:rounded-3xl bg-slate-900/90 md:border md:border-slate-800 shadow-2xl overflow-hidden backdrop-blur-xl">
       {/* Chat Header */}
-      <div className="px-5 py-3.5 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between gap-4 shrink-0">
-        <div className="flex items-center gap-3">
+      <div className="px-4 md:px-5 py-3 md:py-3.5 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between gap-3 sm:gap-4 shrink-0 pt-safe">
+        <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
           <button
             onClick={() => navigate('/dashboard')}
-            className="p-2 -ml-2 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            className="p-2 -ml-1 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors shrink-0"
+            aria-label="Back to dashboard"
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
 
-          <div className="relative w-11 h-11 rounded-xl overflow-hidden bg-slate-800 border border-slate-700 shrink-0">
+          <div className="relative w-10 h-10 sm:w-11 sm:h-11 rounded-xl overflow-hidden bg-slate-800 border border-slate-700 shrink-0">
             {otherUser?.profile_picture ? (
               <img src={otherUser.profile_picture} alt="" className="w-full h-full object-cover" />
             ) : (
-              <div className="w-full h-full flex items-center justify-center font-bold text-lg text-pink-400 bg-pink-500/10">
+              <div className="w-full h-full flex items-center justify-center font-bold text-base sm:text-lg text-pink-400 bg-pink-500/10">
                 {otherUser?.display_name?.charAt(0) || 'U'}
               </div>
             )}
@@ -457,16 +586,16 @@ export const Chat = () => {
             )}
           </div>
 
-          <div>
-            <div className="flex items-center gap-2">
-              <h3 className="font-bold text-sm text-white">{otherUser?.display_name || 'Chat'}</h3>
-              <span className="font-mono text-xs text-pink-400 font-semibold">{otherUser?.profile_id}</span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <h3 className="font-bold text-sm text-white truncate max-w-[130px] sm:max-w-[200px]">{otherUser?.display_name || 'Chat'}</h3>
+              <span className="font-mono text-[10px] sm:text-xs text-pink-400 font-semibold shrink-0">{otherUser?.profile_id}</span>
             </div>
             <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
               {otherUserTyping ? (
                 <span className="text-pink-400 font-medium animate-pulse">Typing...</span>
               ) : otherUser?.is_online ? (
-                <span className="text-emerald-400">Online</span>
+                <span className="text-emerald-400 font-medium">Online</span>
               ) : (
                 <span>Offline</span>
               )}
@@ -476,9 +605,9 @@ export const Chat = () => {
 
         {/* Reconnect Status Banner */}
         {!isWsConnected && (
-          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs">
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs shrink-0">
             <WifiOff className="w-3.5 h-3.5 animate-pulse" />
-            <span className="hidden sm:inline">Connecting...</span>
+            <span className="hidden sm:inline">Reconnecting...</span>
           </div>
         )}
       </div>
@@ -487,7 +616,7 @@ export const Chat = () => {
       <div
         ref={chatContainerRef}
         onScroll={handleScroll}
-        className="flex-grow p-4 md:p-6 overflow-y-auto space-y-3 bg-gradient-to-b from-slate-950/40 to-slate-900/40 relative"
+        className="flex-grow p-3 sm:p-4 md:p-6 overflow-y-auto space-y-3 bg-gradient-to-b from-slate-950/40 to-slate-900/40 relative min-h-0"
       >
         {loadingOlder && (
           <div className="py-2 text-center text-xs text-slate-500">
@@ -495,12 +624,10 @@ export const Chat = () => {
           </div>
         )}
 
-        {isLoading ? (
-          <div className="h-full flex items-center justify-center">
-            <Loader />
-          </div>
+        {isLoading && messages.length === 0 ? (
+          <ChatSkeleton />
         ) : messages.length === 0 ? (
-          <div className="h-full flex flex-col items-center justify-center text-center text-slate-500 space-y-2">
+          <div className="h-full flex flex-col items-center justify-center text-center text-slate-500 space-y-2 py-8">
             <div className="w-12 h-12 rounded-2xl bg-slate-800 text-pink-400 flex items-center justify-center">
               <Send className="w-5 h-5" />
             </div>
@@ -516,7 +643,7 @@ export const Chat = () => {
                 className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}
               >
                 <div
-                  className={`max-w-[85%] sm:max-w-[75%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm break-words ${
+                  className={`max-w-[85%] sm:max-w-[75%] px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm break-words ${
                     isMe
                       ? 'bg-gradient-to-r from-pink-500 to-indigo-600 text-white rounded-br-xs shadow-pink-500/10'
                       : 'bg-slate-800 border border-slate-700/60 text-slate-100 rounded-bl-xs'
@@ -538,13 +665,26 @@ export const Chat = () => {
                   >
                     <span>{formatMessageTime(msg.created_at)}</span>
                     {isMe && (
-                      <span className="ml-0.5">
-                        {msg.status === 'sending' ? (
-                          <Clock className="w-3 h-3 animate-spin" />
+                      <span className="ml-1 inline-flex items-center">
+                        {msg.status === 'failed' ? (
+                          <button
+                            type="button"
+                            onClick={() => handleRetry(msg)}
+                            className="inline-flex items-center gap-1 text-rose-300 hover:text-white bg-rose-500/20 hover:bg-rose-500/30 px-1.5 py-0.5 rounded text-[10px] cursor-pointer transition-colors"
+                            title="Sending failed. Click to retry."
+                            aria-label="Retry sending message"
+                          >
+                            <AlertCircle className="w-3 h-3 text-rose-400" />
+                            <span className="font-semibold underline">Retry</span>
+                          </button>
+                        ) : msg.status === 'sending' ? (
+                          <Clock className="w-3 h-3 animate-spin text-pink-200/50" title="Sending..." />
                         ) : msg.status === 'seen' ? (
-                          <CheckCheck className="w-3.5 h-3.5 text-pink-200" />
+                          <CheckCheck className="w-3.5 h-3.5 text-pink-200 font-bold" title="Seen" />
+                        ) : msg.status === 'delivered' ? (
+                          <CheckCheck className="w-3.5 h-3.5 text-slate-400/80" title="Delivered" />
                         ) : (
-                          <Check className="w-3.5 h-3.5 text-pink-200/70" />
+                          <Check className="w-3.5 h-3.5 text-pink-200/60" title="Sent" />
                         )}
                       </span>
                     )}
@@ -570,17 +710,17 @@ export const Chat = () => {
       {/* Floating Scroll to Bottom Button */}
       {showScrollBottom && (
         <button
-          onClick={scrollToBottom}
-          className="absolute bottom-20 right-8 p-2.5 rounded-full bg-pink-500 hover:bg-pink-600 text-white shadow-xl transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer z-10"
+          onClick={() => scrollToBottom('smooth')}
+          className="absolute bottom-20 right-6 sm:right-8 p-2.5 rounded-full bg-pink-500 hover:bg-pink-600 text-white shadow-xl transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer z-10"
         >
           <ChevronDown className="w-4 h-4" />
-          <span>New messages</span>
+          <span className="hidden sm:inline">New messages</span>
         </button>
       )}
 
       {/* Bottom Input Field */}
       {isRecording ? (
-        <div className="p-3 md:p-4 bg-slate-950/80 border-t border-slate-800 shrink-0">
+        <div className="p-2.5 sm:p-3 md:p-4 bg-slate-950/90 border-t border-slate-800 shrink-0 pb-safe">
           {isLocked ? (
             /* Locked Hands-free Recording Bar */
             <div className="flex items-center justify-between w-full p-2 bg-slate-900/90 rounded-2xl border border-slate-700/60 shadow-xl backdrop-blur-md">
@@ -588,28 +728,28 @@ export const Chat = () => {
               <button
                 type="button"
                 onClick={cancelRecording}
-                className="p-3 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
+                className="p-2.5 sm:p-3 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
                 title="Discard recording"
                 aria-label="Discard recording"
               >
-                <Trash2 className="w-5 h-5" />
+                <Trash2 className="w-4 sm:w-5 h-4 sm:h-5" />
               </button>
 
-              {/* Center: Live Timer and Audio Level Bars */}
-              <div className="flex items-center gap-3">
+              {/* Middle: Live Timer + Waveform */}
+              <div className="flex items-center gap-1.5 sm:gap-3">
                 <div className="flex items-center gap-1.5">
-                  <span className={`w-2.5 h-2.5 rounded-full ${isPaused ? 'bg-amber-400' : 'bg-rose-500 animate-pulse motion-reduce:animate-none'}`} />
-                  <span className="font-mono text-sm font-bold text-white">
+                  <span className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ${isPaused ? 'bg-amber-400' : 'bg-rose-500 animate-pulse motion-reduce:animate-none'}`} />
+                  <span className="font-mono text-xs sm:text-sm font-bold text-white">
                     {formatRecordingTime(recordDuration)}
                   </span>
                 </div>
 
-                <div className="flex items-center gap-1 h-6 px-2">
+                <div className="flex items-center gap-1 h-5 sm:h-6 px-1 sm:px-2">
                   {audioLevels.map((lvl, idx) => (
                     <div
                       key={idx}
                       style={{ height: `${Math.round(lvl * 100)}%` }}
-                      className={`w-1 rounded-full transition-all duration-75 ${
+                      className={`w-0.5 sm:w-1 rounded-full transition-all duration-75 ${
                         isPaused ? 'bg-slate-600' : 'bg-pink-400'
                       }`}
                     />
@@ -618,25 +758,25 @@ export const Chat = () => {
               </div>
 
               {/* Right: Pause/Resume + Send */}
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 sm:gap-2">
                 <button
                   type="button"
                   onClick={isPaused ? resumeRecording : pauseRecording}
-                  className="p-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer"
+                  className="p-2.5 sm:p-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer"
                   title={isPaused ? 'Resume recording' : 'Pause recording'}
                   aria-label={isPaused ? 'Resume recording' : 'Pause recording'}
                 >
-                  {isPaused ? <Play className="w-5 h-5 fill-current" /> : <Pause className="w-5 h-5 fill-current" />}
+                  {isPaused ? <Play className="w-4 sm:w-5 h-4 sm:h-5 fill-current" /> : <Pause className="w-4 sm:w-5 h-4 sm:h-5 fill-current" />}
                 </button>
 
                 <button
                   type="button"
                   onClick={stopAndSend}
-                  className="p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer"
+                  className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer"
                   title="Send voice message"
                   aria-label="Send voice message"
                 >
-                  <Send className="w-5 h-5" />
+                  <Send className="w-4 sm:w-5 h-4 sm:h-5" />
                 </button>
               </div>
             </div>
@@ -656,18 +796,18 @@ export const Chat = () => {
               {/* Status: Red dot + timer */}
               <div className="flex items-center gap-2 px-2">
                 <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse motion-reduce:animate-none" />
-                <span className="font-mono text-sm font-bold text-white">
+                <span className="font-mono text-xs sm:text-sm font-bold text-white">
                   {formatRecordingTime(recordDuration)}
                 </span>
               </div>
 
               {/* Slide to cancel indicator */}
               <div
-                className={`flex items-center gap-2 transition-all ${
-                  isCanceling ? 'text-rose-400 font-semibold scale-105' : 'text-slate-400 text-xs'
+                className={`flex items-center gap-1.5 sm:gap-2 transition-all ${
+                  isCanceling ? 'text-rose-400 font-semibold scale-105' : 'text-slate-400 text-[11px] sm:text-xs'
                 }`}
               >
-                <Trash2 className="w-4 h-4" />
+                <Trash2 className="w-3.5 sm:w-4 h-3.5 sm:h-4" />
                 <span>{isCanceling ? 'Release to cancel' : '< Slide to cancel'}</span>
               </div>
 
@@ -676,7 +816,7 @@ export const Chat = () => {
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
                 onPointerCancel={handlePointerCancel}
-                className="p-3 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-600 text-white shadow-lg shadow-rose-500/30 scale-110 animate-pulse motion-reduce:animate-none cursor-pointer shrink-0"
+                className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-600 text-white shadow-lg shadow-rose-500/30 scale-110 animate-pulse motion-reduce:animate-none cursor-pointer shrink-0"
               >
                 <Mic className="w-5 h-5" />
               </div>
@@ -686,7 +826,7 @@ export const Chat = () => {
       ) : (
         <form
           onSubmit={handleSendMessage}
-          className="p-3 md:p-4 bg-slate-950/80 border-t border-slate-800 flex items-end gap-2 shrink-0"
+          className="p-2.5 sm:p-3 md:p-4 bg-slate-950/90 border-t border-slate-800 flex items-end gap-2 shrink-0 pb-safe"
         >
           <textarea
             rows={1}
@@ -694,17 +834,17 @@ export const Chat = () => {
             value={inputText}
             onChange={handleInputChange}
             onKeyDown={handleKeyDown}
-            className="flex-grow px-4 py-3 rounded-2xl bg-slate-900 border border-slate-800 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-pink-500 focus:ring-1 focus:ring-pink-500 transition-all resize-none max-h-32 leading-relaxed"
+            className="flex-grow px-3.5 sm:px-4 py-2.5 sm:py-3 rounded-2xl bg-slate-900 border border-slate-800 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-pink-500 focus:ring-1 focus:ring-pink-500 transition-all resize-none max-h-32 leading-relaxed"
           />
 
           {inputText.trim() ? (
             <button
               type="submit"
-              className="p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer shrink-0"
+              className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer shrink-0"
               title="Send message"
               aria-label="Send message"
             >
-              <Send className="w-5 h-5" />
+              <Send className="w-4 sm:w-5 h-4 sm:h-5" />
             </button>
           ) : (
             <button
@@ -713,11 +853,11 @@ export const Chat = () => {
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerCancel}
-              className="p-3 rounded-2xl bg-slate-800 hover:bg-slate-700 active:bg-pink-600 text-slate-300 hover:text-white transition-all cursor-pointer shrink-0 touch-none select-none"
+              className="p-2.5 sm:p-3 rounded-2xl bg-slate-800 hover:bg-slate-700 active:bg-pink-600 text-slate-300 hover:text-white transition-all cursor-pointer shrink-0 touch-none select-none"
               title="Hold to record, release to send"
               aria-label="Hold to record voice message, release to send"
             >
-              <Mic className="w-5 h-5" />
+              <Mic className="w-4 sm:w-5 h-4 sm:h-5" />
             </button>
           )}
         </form>

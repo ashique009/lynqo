@@ -33,3 +33,6 @@ frontend/dist/
 *.pem
 private_key.pem
 public_key.pem
+
+# Screenshots & Local Benchmarks
+mobile_screenshots/

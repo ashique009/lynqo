@@ -721,4 +721,76 @@ class VoiceMessagingTests(TestCase):
         self.assertEqual(res_unauth.status_code, 403)
 
 
+class MessagePerformanceAndReliabilityTests(TestCase):
+    def setUp(self):
+        self.client = Client()
+        self.user1 = User.objects.create(username="LYNQ-PERF01", full_name="Perf User 1")
+        self.p1 = Profile.objects.create(user=self.user1, profile_id="LYNQ-PERF01", display_name="Perf User 1")
+        self.s1 = ProfileSession.objects.create(user=self.user1, token="perf-token-1")
+
+        self.user2 = User.objects.create(username="LYNQ-PERF02", full_name="Perf User 2")
+        self.p2 = Profile.objects.create(user=self.user2, profile_id="LYNQ-PERF02", display_name="Perf User 2")
+        self.s2 = ProfileSession.objects.create(user=self.user2, token="perf-token-2")
+
+        ConnectRequest.objects.create(sender=self.user1, receiver=self.user2, status='accepted')
+        self.conv, _ = Conversation.get_or_create_between(self.user1, self.user2)
+
+    def test_message_list_eliminates_n_plus_one_queries(self):
+        """Fetching 30 messages should execute O(1) queries (<= 5), eliminating N+1 queries."""
+        msgs = [
+            Message(
+                conversation=self.conv,
+                sender=self.user1 if i % 2 == 0 else self.user2,
+                content=f"Performance message {i}",
+                client_message_id=f"perf-cli-{i}",
+                status='sent'
+            )
+            for i in range(30)
+        ]
+        Message.objects.bulk_create(msgs)
+
+        with self.assertNumQueries(5):
+            # 1: Session lookup, 2: Conversation auth lookup, 3: Batched message query,
+            # 4: Mark unread seen update, 5: LastSeen middleware update
+            response = self.client.get(
+                f"/api/auth/conversations/{self.conv.id}/messages/?limit=20",
+                HTTP_AUTHORIZATION=f"Bearer {self.s1.token}"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data['success'])
+        self.assertEqual(len(data['messages']), 20)
+        self.assertTrue(data['has_more'])
+        # Verify serialization includes conversation_id without extra queries
+        self.assertEqual(data['messages'][0]['conversation_id'], self.conv.id)
+
+    def test_message_send_idempotent_deduplication(self):
+        """Sending messages with identical client_message_id returns existing record without duplicating."""
+        client_msg_id = "unique-client-uuid-999"
+        res1 = self.client.post(
+            f"/api/auth/conversations/{self.conv.id}/messages/send/",
+            data={'content': 'Hello once', 'client_message_id': client_msg_id},
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f"Bearer {self.s1.token}"
+        )
+        self.assertEqual(res1.status_code, 201)
+        first_id = res1.json()['message']['id']
+
+        # Send again with same client_message_id
+        res2 = self.client.post(
+            f"/api/auth/conversations/{self.conv.id}/messages/send/",
+            data={'content': 'Hello once', 'client_message_id': client_msg_id},
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f"Bearer {self.s1.token}"
+        )
+        self.assertEqual(res2.status_code, 200)
+        self.assertEqual(res2.json()['message']['id'], first_id)
+        self.assertTrue(res2.json().get('deduplicated'))
+
+        # DB must have exactly 1 record
+        self.assertEqual(Message.objects.filter(client_message_id=client_msg_id).count(), 1)
+
+
+
 

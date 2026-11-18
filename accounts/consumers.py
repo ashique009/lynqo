@@ -57,6 +57,9 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         elif msg_type == 'typing':
             await self.handle_typing(content)
 
+        elif msg_type == 'mark_delivered':
+            await self.handle_mark_delivered(content)
+
         elif msg_type == 'mark_seen':
             await self.handle_mark_seen(content)
 
@@ -123,6 +126,21 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                 }
             )
 
+    async def handle_mark_delivered(self, data):
+        conv_id = data.get('conversation_id')
+        raw_ids = data.get('message_ids') or ([data.get('message_id')] if data.get('message_id') else [])
+        if await self.is_participant(conv_id) and raw_ids:
+            delivered_ids = await self.mark_messages_as_delivered(conv_id, raw_ids)
+            if delivered_ids:
+                await self.channel_layer.group_send(
+                    f"conv_{conv_id}",
+                    {
+                        'type': 'broadcast_messages_delivered',
+                        'conversation_id': conv_id,
+                        'message_ids': delivered_ids,
+                    }
+                )
+
     async def handle_mark_seen(self, data):
         conv_id = data.get('conversation_id')
         if await self.is_participant(conv_id):
@@ -166,6 +184,13 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             'type': 'messages_seen',
             'conversation_id': event['conversation_id'],
             'seen_by_profile_id': event['seen_by_profile_id'],
+        })
+
+    async def broadcast_messages_delivered(self, event):
+        await self.send_json({
+            'type': 'messages_delivered',
+            'conversation_id': event['conversation_id'],
+            'message_ids': event['message_ids'],
         })
 
     async def user_presence_update(self, event):
@@ -304,6 +329,19 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         conv.updated_at = msg.created_at
         conv.save(update_fields=['updated_at'])
         return self._format_message(msg), True
+
+    @database_sync_to_async
+    def mark_messages_as_delivered(self, conv_id, message_ids):
+        conv = Conversation.objects.get(id=conv_id)
+        qs = Message.objects.filter(
+            conversation=conv,
+            id__in=message_ids,
+            status='sent'
+        ).exclude(sender=self.user)
+        delivered_ids = list(qs.values_list('id', flat=True))
+        if delivered_ids:
+            qs.update(status='delivered')
+        return delivered_ids
 
     @database_sync_to_async
     def mark_messages_as_seen(self, conv_id):

@@ -205,8 +205,8 @@ export const VoiceMessage = ({
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
-    <div className="flex flex-col gap-1 w-64 sm:w-72 select-none">
-      <div className="flex items-center gap-3">
+    <div className="flex flex-col gap-1 w-full min-w-[190px] max-w-[270px] select-none">
+      <div className="flex items-center gap-2.5 sm:gap-3">
         {/* Play / Pause / Retry Button */}
         {hasError ? (
           <button

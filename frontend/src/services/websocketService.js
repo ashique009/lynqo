@@ -113,14 +113,16 @@ class WebSocketService {
 
   scheduleReconnect(token) {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    const delay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), this.maxReconnectDelay);
+    const baseDelay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), this.maxReconnectDelay);
+    // Add jitter (±20%) to prevent thundering herd problems on network reconnect
+    const jitter = baseDelay * (0.8 + Math.random() * 0.4);
     this.reconnectAttempts += 1;
     this.reconnectTimer = setTimeout(() => {
       const activeToken = token || this.currentToken || (typeof localStorage !== 'undefined' ? localStorage.getItem('lynqo_token') : null);
       if (activeToken) {
         this.connect(activeToken);
       }
-    }, delay);
+    }, jitter);
   }
 
   startHeartbeat() {
@@ -173,6 +175,17 @@ class WebSocketService {
       type: 'typing',
       conversation_id: convId,
       is_typing: isTyping,
+    });
+  }
+
+  markDelivered(convId, messageIds) {
+    if (!convId || !messageIds) return false;
+    const ids = Array.isArray(messageIds) ? messageIds : [messageIds];
+    if (ids.length === 0) return false;
+    return this.send({
+      type: 'mark_delivered',
+      conversation_id: convId,
+      message_ids: ids,
     });
   }
 

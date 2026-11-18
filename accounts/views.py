@@ -648,15 +648,16 @@ class MessageListView(APIView):
         before_id = request.query_params.get('before_id')
         since_id = request.query_params.get('since_id')
 
-        qs = Message.objects.filter(conversation=conv).select_related('sender__profile')
+        qs = Message.objects.filter(conversation=conv).select_related('sender__profile', 'conversation')
 
         if before_id:
             qs = qs.filter(id__lt=int(before_id))
         if since_id:
             qs = qs.filter(id__gt=int(since_id))
 
-        messages = qs.order_by('-created_at', '-id')[:limit]
-        messages = list(reversed(messages))
+        raw_messages = list(qs.order_by('-created_at', '-id')[:limit + 1])
+        has_more = len(raw_messages) > limit
+        messages = list(reversed(raw_messages[:limit]))
 
         # Mark messages as seen if unread
         unread_ids = [m.id for m in messages if not m.is_read and m.sender_id != request.user.id]
@@ -680,7 +681,7 @@ class MessageListView(APIView):
         return Response({
             'success': True,
             'messages': MessageSerializer(messages, many=True).data,
-            'has_more': qs.filter(id__lt=messages[0].id).exists() if messages else False,
+            'has_more': has_more,
         })
 
 
