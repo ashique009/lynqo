@@ -99,7 +99,7 @@ if DATABASE_URL:
     is_neon_pooler = '-pooler' in DATABASE_URL
     db_config = dj_database_url.config(
         default=DATABASE_URL,
-        conn_max_age=0 if is_neon_pooler else 600,
+        conn_max_age=600,
         conn_health_checks=True,
         ssl_require=True,
     )
@@ -218,7 +218,7 @@ if CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET:
     )
     STORAGES = {
         "default": {
-            "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
+            "BACKEND": "accounts.storage.AdaptiveCloudinaryStorage",
         },
         "staticfiles": {
             "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",

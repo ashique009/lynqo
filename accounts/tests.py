@@ -679,6 +679,76 @@ class VoiceMessagingTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Unsupported", response.json()['message'])
 
+    def test_adaptive_cloudinary_storage_routing(self):
+        """AdaptiveCloudinaryStorage routes audio to video and avatars to image."""
+        from accounts.storage import AdaptiveCloudinaryStorage
+        storage = AdaptiveCloudinaryStorage()
+        for ext in ['webm', 'mp3', 'mp4', 'ogg', 'wav', 'aac', 'm4a', 'opus', 'weba']:
+            self.assertEqual(storage._get_resource_type(f"voice_file.{ext}"), 'video')
+        for ext in ['jpg', 'png', 'webp', 'gif']:
+            self.assertEqual(storage._get_resource_type(f"avatar.{ext}"), 'image')
+
+    def test_voice_message_cloudinary_upload_uses_video_resource_type(self):
+        """Voice upload with Cloudinary credentials passes resource_type='video' and authenticated type."""
+        from unittest.mock import patch
+        from django.conf import settings
+        with patch.object(settings, 'CLOUDINARY_CLOUD_NAME', 'mock_cloud'), \
+             patch.object(settings, 'CLOUDINARY_API_KEY', 'mock_key'), \
+             patch.object(settings, 'CLOUDINARY_API_SECRET', 'mock_secret'), \
+             patch('cloudinary.uploader.upload') as mock_upload, \
+             patch('cloudinary.utils.cloudinary_url', return_value=('https://res.cloudinary.com/mock/signed_audio.webm', {})):
+
+            mock_upload.return_value = {
+                'public_id': 'lynqo_voice/test/voice_123',
+                'secure_url': 'https://res.cloudinary.com/mock/voice_123.webm',
+                'resource_type': 'video'
+            }
+
+            webm_header = b'\x1aE\xdf\xa3\x9f\x42\x86\x81\x01\x42\xf7\x81\x01\x42\xf2\x81\x04\x42\x87\x81\x02\x42\x85\x81\x02' + b'\x00' * 50
+            audio_file = SimpleUploadedFile("recording.webm", webm_header, content_type="audio/webm")
+
+            response = self.client.post(
+                f"/api/auth/conversations/{self.conv.id}/messages/voice/",
+                {'audio': audio_file, 'duration': 12, 'client_message_id': 'cli-cld-voice-1'},
+                HTTP_AUTHORIZATION=f"Bearer {self.s1.token}"
+            )
+            self.assertEqual(response.status_code, 201)
+            data = response.json()
+            self.assertTrue(data['success'])
+            created_msg = Message.objects.get(id=data['message']['id'])
+            self.assertEqual(created_msg.audio_storage_id, 'lynqo_voice/test/voice_123')
+
+            # Verify upload call kwargs
+            mock_upload.assert_called_once()
+            _, kwargs = mock_upload.call_args
+            self.assertEqual(kwargs.get('resource_type'), 'video')
+            self.assertEqual(kwargs.get('type'), 'authenticated')
+
+            # Verify playback URL generation
+            msg_id = data['message']['id']
+            res_audio = self.client.get(
+                f"/api/auth/conversations/{self.conv.id}/messages/{msg_id}/audio/?json=1",
+                HTTP_AUTHORIZATION=f"Bearer {self.s1.token}"
+            )
+            self.assertEqual(res_audio.status_code, 200)
+            self.assertEqual(res_audio.json()['audio_url'], 'https://res.cloudinary.com/mock/signed_audio.webm')
+
+    def test_voice_message_upload_exception_returns_json_never_html(self):
+        """Unexpected internal exceptions in voice upload return structured JSON 500, never Django HTML."""
+        from unittest.mock import patch
+        audio_file = SimpleUploadedFile("test_err.wav", self.wav_bytes, content_type="audio/wav")
+
+        with patch('accounts.models.Message.save', side_effect=RuntimeError("Database failure simulated")):
+            response = self.client.post(
+                f"/api/auth/conversations/{self.conv.id}/messages/voice/",
+                {'audio': audio_file, 'duration': 5, 'client_message_id': 'cli-err-voice'},
+                HTTP_AUTHORIZATION=f"Bearer {self.s1.token}"
+            )
+            self.assertEqual(response.status_code, 500)
+            self.assertTrue(response.headers['Content-Type'].startswith('application/json'))
+            self.assertEqual(response.json()['success'], False)
+            self.assertIn('Failed to process voice recording', response.json()['message'])
+
     def test_voice_message_unauthorized_upload_denied(self):
         """Non-participant cannot upload audio to another user's conversation."""
         audio_file = SimpleUploadedFile("test.wav", self.wav_bytes, content_type="audio/wav")

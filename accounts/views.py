@@ -1,5 +1,7 @@
 import secrets
 import time
+import os
+import logging
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
@@ -11,6 +13,8 @@ from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
+
+logger = logging.getLogger(__name__)
 
 from .auth import SESSION_COOKIE_NAME
 from .models import (
@@ -909,7 +913,7 @@ class VoiceMessageUploadView(APIView):
 
         duration_sec = max(1, min(int(round(duration_val)), 120)) if duration_val > 0 else 1
 
-        # Format detection
+        # Format detection (WebM, MP4, OGG, WAV, AAC, MP3)
         ext, mime = detect_audio_extension(audio_file, audio_file.content_type)
         if not ext:
             return Response({'success': False, 'message': 'Unsupported or invalid audio format.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -930,49 +934,96 @@ class VoiceMessageUploadView(APIView):
 
         safe_filename = f"voice_{conv.id}_{secrets.token_hex(16)}.{ext}"
 
-        with transaction.atomic():
-            msg = Message(
-                conversation=conv,
-                sender=request.user,
-                client_message_id=client_msg_id,
-                message_type='voice',
-                duration_seconds=duration_sec,
-                file_size=audio_file.size,
-                audio_format=ext,
-                status='sent'
-            )
-            msg.audio_file.save(safe_filename, audio_file, save=False)
-            msg.audio_storage_id = msg.audio_file.name
-            msg.save()
+        c_cloud = getattr(settings, 'CLOUDINARY_CLOUD_NAME', None)
+        c_key = getattr(settings, 'CLOUDINARY_API_KEY', None)
+        c_secret = getattr(settings, 'CLOUDINARY_API_SECRET', None)
 
-            conv.updated_at = msg.created_at
-            conv.save(update_fields=['updated_at'])
+        storage_id = None
+        upload_success = False
 
-        msg_data = MessageSerializer(msg, context={'request': request}).data
+        try:
+            # If Cloudinary is configured, upload with resource_type='video' (Cloudinary's audio/video format)
+            if c_cloud and c_key and c_secret:
+                try:
+                    import cloudinary.uploader
+                    audio_file.seek(0)
+                    up_res = cloudinary.uploader.upload(
+                        audio_file,
+                        resource_type='video',
+                        type='authenticated',
+                        folder=f"lynqo_voice/{conv.id}",
+                        public_id=f"voice_{conv.id}_{secrets.token_hex(16)}",
+                        overwrite=False,
+                    )
+                    storage_id = up_res.get('public_id')
+                    upload_success = True
+                except Exception as cl_err:
+                    logger.error("Cloudinary voice upload error: %s; falling back to local file storage", cl_err, exc_info=True)
+                    storage_id = None
+                    upload_success = False
 
-        # Broadcast via WebSocket
-        channel_layer = get_channel_layer()
-        if channel_layer:
-            async_to_sync(channel_layer.group_send)(
-                f"conv_{conv.id}",
+            with transaction.atomic():
+                msg = Message(
+                    conversation=conv,
+                    sender=request.user,
+                    client_message_id=client_msg_id,
+                    message_type='voice',
+                    duration_seconds=duration_sec,
+                    file_size=audio_file.size,
+                    audio_format=ext,
+                    status='sent'
+                )
+                if upload_success and storage_id:
+                    msg.audio_storage_id = storage_id
+                    msg.audio_file.name = storage_id
+                else:
+                    audio_file.seek(0)
+                    msg.audio_file.save(safe_filename, audio_file, save=False)
+                    msg.audio_storage_id = msg.audio_file.name
+
+                msg.save()
+                conv.updated_at = msg.created_at
+                conv.save(update_fields=['updated_at'])
+
+            msg_data = MessageSerializer(msg, context={'request': request}).data
+
+            # Broadcast via WebSocket safely
+            try:
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    async_to_sync(channel_layer.group_send)(
+                        f"conv_{conv.id}",
+                        {
+                            'type': 'broadcast_new_message',
+                            'message': msg_data,
+                        }
+                    )
+                    async_to_sync(channel_layer.group_send)(
+                        f"user_{other_user.id}",
+                        {
+                            'type': 'broadcast_conversation_update',
+                            'conversation_id': conv.id,
+                            'message': msg_data,
+                        }
+                    )
+            except Exception as ws_err:
+                logger.warning("WebSocket broadcast skipped or failed: %s", ws_err)
+
+            return Response({
+                'success': True,
+                'message': msg_data,
+            }, status=status.HTTP_201_CREATED)
+
+        except Exception as err:
+            logger.error("Failed to process voice message upload: %s", err, exc_info=True)
+            return Response(
                 {
-                    'type': 'broadcast_new_message',
-                    'message': msg_data,
-                }
+                    'success': False,
+                    'message': 'Failed to process voice recording. Please retry.',
+                    'detail': str(err) if getattr(settings, 'DEBUG', False) else None,
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-            async_to_sync(channel_layer.group_send)(
-                f"user_{other_user.id}",
-                {
-                    'type': 'broadcast_conversation_update',
-                    'conversation_id': conv.id,
-                    'message': msg_data,
-                }
-            )
-
-        return Response({
-            'success': True,
-            'message': msg_data,
-        }, status=status.HTTP_201_CREATED)
 
 
 class VoiceMessageAudioView(APIView):
@@ -992,7 +1043,7 @@ class VoiceMessageAudioView(APIView):
         except Message.DoesNotExist:
             return Response({'success': False, 'message': 'Voice message not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        if not msg.audio_file:
+        if not msg.audio_file and not msg.audio_storage_id:
             return Response({'success': False, 'message': 'Audio file not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         c_cloud = getattr(settings, 'CLOUDINARY_CLOUD_NAME', None)
@@ -1002,24 +1053,32 @@ class VoiceMessageAudioView(APIView):
         ext = msg.audio_format or 'webm'
         content_type = f"audio/{ext}"
 
-        if c_cloud and c_key and c_secret:
-            import cloudinary.utils
-            signed_url, _ = cloudinary.utils.cloudinary_url(
-                msg.audio_storage_id or msg.audio_file.name,
-                resource_type='video',
-                sign_url=True,
-                type='authenticated',
-                expires_at=int(time.time()) + 300
-            )
-            if request.query_params.get('json') == '1':
-                return Response({'success': True, 'audio_url': signed_url})
-            return HttpResponseRedirect(signed_url)
+        storage_id = msg.audio_storage_id or (msg.audio_file.name if msg.audio_file else None)
+        is_cloudinary = c_cloud and c_key and c_secret and storage_id and not storage_id.startswith('voice_messages/')
+
+        if is_cloudinary:
+            try:
+                import cloudinary.utils
+                signed_url, _ = cloudinary.utils.cloudinary_url(
+                    storage_id,
+                    resource_type='video',
+                    sign_url=True,
+                    type='authenticated',
+                    expires_at=int(time.time()) + 3600
+                )
+                if request.query_params.get('json') == '1':
+                    return Response({'success': True, 'audio_url': signed_url})
+                return HttpResponseRedirect(signed_url)
+            except Exception as cl_err:
+                logger.error("Cloudinary signed URL error: %s", cl_err)
 
         try:
             file_handle = msg.audio_file.open('rb')
             response = FileResponse(file_handle, content_type=content_type)
-            response['Content-Disposition'] = f'inline; filename="{msg.audio_file.name}"'
+            filename = os.path.basename(msg.audio_file.name or f"voice_{msg.id}.{ext}")
+            response['Content-Disposition'] = f'inline; filename="{filename}"'
             return response
-        except Exception:
-            return Response({'success': False, 'message': 'Error opening audio file.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except Exception as file_err:
+            logger.error("Local audio file open error: %s", file_err)
+            return Response({'success': False, 'message': 'Audio file not found or inaccessible.'}, status=status.HTTP_404_NOT_FOUND)
 
