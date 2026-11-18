@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   ArrowLeft, Send, Check, CheckCheck, Clock,
-  ChevronDown, WifiOff, AlertCircle, Mic, Lock, Trash2, Pause, Play, RefreshCw
+  ChevronDown, WifiOff, AlertCircle, Mic, Lock, Trash2, Pause, Play, RefreshCw,
+  MoreVertical, Copy, Edit2, Ban, X
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -14,6 +15,7 @@ import { audioPlayerManager } from '../utils/audioPlayerManager';
 import VoiceMessage from '../components/VoiceMessage';
 import useVoiceRecorder from '../hooks/useVoiceRecorder';
 import Loader from '../components/Loader';
+import Modal from '../components/Modal';
 
 const formatRecordingTime = (sec) => {
   if (!sec || isNaN(sec)) return '0:00';
@@ -66,6 +68,17 @@ export const Chat = () => {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [isWsConnected, setIsWsConnected] = useState(wsService.isConnected);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
+
+  // Message Action Menu & Edit / Delete states
+  const [activeMenuMessage, setActiveMenuMessage] = useState(null);
+  const [menuPosition, setMenuPosition] = useState(null);
+  const [editingMessageId, setEditingMessageId] = useState(null);
+  const [editingText, setEditingText] = useState('');
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [deletingMessage, setDeletingMessage] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const longPressTimerRef = useRef(null);
+  const touchStartPosRef = useRef({ x: 0, y: 0 });
 
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
@@ -272,6 +285,39 @@ export const Chat = () => {
       });
     });
 
+    // Listen for message edited
+    const unsubEdit = wsService.on('message_edited', (data) => {
+      const editedMsg = data.message;
+      if (String(editedMsg.conversation_id) === String(activeConvIdRef.current)) {
+        setMessages((prev) => {
+          const updated = prev.map((m) =>
+            m.id === editedMsg.id || (m.client_message_id && m.client_message_id === editedMsg.client_message_id)
+              ? { ...m, content: editedMsg.content, is_edited: true }
+              : m
+          );
+          cacheSet(`conv_msgs_${activeConvIdRef.current}`, updated, 60);
+          return updated;
+        });
+      }
+    });
+
+    // Listen for message deleted
+    const unsubDelete = wsService.on('message_deleted', (data) => {
+      if (String(data.conversation_id) === String(activeConvIdRef.current)) {
+        if (data.delete_type === 'everyone') {
+          setMessages((prev) => {
+            const updated = prev.map((m) =>
+              m.id === data.message_id
+                ? { ...m, is_deleted: true, content: '', audio_url: null }
+                : m
+            );
+            cacheSet(`conv_msgs_${activeConvIdRef.current}`, updated, 60);
+            return updated;
+          });
+        }
+      }
+    });
+
     return () => {
       isCurrent = false;
       audioPlayerManager.stopAll();
@@ -283,6 +329,8 @@ export const Chat = () => {
       unsubTyping();
       unsubSeen();
       unsubPresence();
+      unsubEdit();
+      unsubDelete();
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       if (otherTypingTimeoutRef.current) clearTimeout(otherTypingTimeoutRef.current);
     };
@@ -315,6 +363,201 @@ export const Chat = () => {
   const scrollToBottom = (behavior = 'auto') => {
     messagesEndRef.current?.scrollIntoView({ behavior });
     setShowScrollBottom(false);
+  };
+
+  // Close menu on click outside, scroll, Escape
+  useEffect(() => {
+    const handleCloseMenu = () => {
+      setActiveMenuMessage(null);
+      setMenuPosition(null);
+    };
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        handleCloseMenu();
+        if (editingMessageId) setEditingMessageId(null);
+      }
+    };
+
+    window.addEventListener('click', handleCloseMenu);
+    window.addEventListener('scroll', handleCloseMenu, true);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      window.removeEventListener('click', handleCloseMenu);
+      window.removeEventListener('scroll', handleCloseMenu, true);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [editingMessageId]);
+
+  const handleTouchStart = (msg, e) => {
+    if (msg.is_deleted) return;
+    const touch = e.touches[0];
+    touchStartPosRef.current = { x: touch.clientX, y: touch.clientY };
+
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+
+    longPressTimerRef.current = setTimeout(() => {
+      if (navigator.vibrate) navigator.vibrate(40);
+      setActiveMenuMessage(msg);
+      setMenuPosition({
+        x: Math.max(10, Math.min(touch.clientX - 60, window.innerWidth - 160)),
+        y: Math.max(10, Math.min(touch.clientY - 40, window.innerHeight - 200)),
+      });
+    }, 450);
+  };
+
+  const handleTouchMove = (e) => {
+    if (!longPressTimerRef.current) return;
+    const touch = e.touches[0];
+    const dx = Math.abs(touch.clientX - touchStartPosRef.current.x);
+    const dy = Math.abs(touch.clientY - touchStartPosRef.current.y);
+    if (dx > 10 || dy > 10) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const handleTouchEnd = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const handleContextMenu = (msg, e) => {
+    if (msg.is_deleted) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setActiveMenuMessage(msg);
+    setMenuPosition({
+      x: Math.max(10, Math.min(e.clientX, window.innerWidth - 160)),
+      y: Math.max(10, Math.min(e.clientY, window.innerHeight - 200)),
+    });
+  };
+
+  const handleThreeDotClick = (msg, e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    setActiveMenuMessage(msg);
+    setMenuPosition({
+      x: Math.max(10, Math.min(rect.left - 50, window.innerWidth - 160)),
+      y: Math.max(10, Math.min(rect.bottom + 4, window.innerHeight - 200)),
+    });
+  };
+
+  const handleCopyMessage = (msg) => {
+    if (msg.content) {
+      navigator.clipboard.writeText(msg.content);
+      showToast('Copied to clipboard', 'success');
+    }
+    setActiveMenuMessage(null);
+  };
+
+  const handleStartEdit = (msg) => {
+    if (msg.is_deleted || msg.message_type !== 'text') return;
+    setEditingMessageId(msg.id);
+    setEditingText(msg.content);
+    setActiveMenuMessage(null);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingMessageId(null);
+    setEditingText('');
+  };
+
+  const handleSaveEdit = async (msgId) => {
+    const trimmed = editingText.trim();
+    if (!trimmed) {
+      showToast('Message cannot be empty', 'error');
+      return;
+    }
+
+    const originalMsg = messages.find((m) => m.id === msgId);
+    const prevContent = originalMsg?.content;
+
+    // Optimistic update
+    setMessages((prev) => {
+      const updated = prev.map((m) => (m.id === msgId ? { ...m, content: trimmed, is_edited: true } : m));
+      cacheSet(`conv_msgs_${activeConvIdRef.current}`, updated, 60);
+      return updated;
+    });
+    setEditingMessageId(null);
+    setEditingText('');
+
+    try {
+      const res = await chatService.editMessage(conversationId, msgId, trimmed);
+      if (!res.success) {
+        setMessages((prev) => {
+          const reverted = prev.map((m) => (m.id === msgId ? { ...m, content: prevContent, is_edited: originalMsg?.is_edited } : m));
+          cacheSet(`conv_msgs_${activeConvIdRef.current}`, reverted, 60);
+          return reverted;
+        });
+        showToast(res.message || 'Failed to edit message', 'error');
+      }
+    } catch (err) {
+      setMessages((prev) => {
+        const reverted = prev.map((m) => (m.id === msgId ? { ...m, content: prevContent, is_edited: originalMsg?.is_edited } : m));
+        cacheSet(`conv_msgs_${activeConvIdRef.current}`, reverted, 60);
+        return reverted;
+      });
+      showToast(err.message || 'Failed to edit message', 'error');
+    }
+  };
+
+  const handlePromptDelete = (msg) => {
+    setDeletingMessage(msg);
+    setActiveMenuMessage(null);
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleConfirmDelete = async (type) => {
+    if (!deletingMessage) return;
+    const msgId = deletingMessage.id;
+    const originalMsg = deletingMessage;
+
+    setIsDeleting(true);
+
+    if (type === 'me') {
+      setMessages((prev) => {
+        const filtered = prev.filter((m) => m.id !== msgId);
+        cacheSet(`conv_msgs_${activeConvIdRef.current}`, filtered, 60);
+        return filtered;
+      });
+    } else {
+      setMessages((prev) => {
+        const updated = prev.map((m) =>
+          m.id === msgId ? { ...m, is_deleted: true, content: '', audio_url: null } : m
+        );
+        cacheSet(`conv_msgs_${activeConvIdRef.current}`, updated, 60);
+        return updated;
+      });
+    }
+
+    setIsDeleteModalOpen(false);
+    setDeletingMessage(null);
+
+    try {
+      const res = await chatService.deleteMessage(conversationId, msgId, type);
+      if (!res.success) {
+        setMessages((prev) => {
+          const reverted = mergeMessages(prev, [originalMsg]);
+          cacheSet(`conv_msgs_${activeConvIdRef.current}`, reverted, 60);
+          return reverted;
+        });
+        showToast(res.message || 'Failed to delete message', 'error');
+      }
+    } catch (err) {
+      setMessages((prev) => {
+        const reverted = mergeMessages(prev, [originalMsg]);
+        cacheSet(`conv_msgs_${activeConvIdRef.current}`, reverted, 60);
+        return reverted;
+      });
+      showToast(err.message || 'Failed to delete message', 'error');
+    } finally {
+      setIsDeleting(false);
+    }
   };
 
   const handleScroll = (e) => {
@@ -683,58 +926,132 @@ export const Chat = () => {
         ) : (
           messages.map((msg, index) => {
             const isMe = msg.sender_profile_id === profile?.profile_id;
+            const isEditing = editingMessageId === msg.id;
             return (
               <div
                 key={msg.client_message_id || msg.id || index}
-                className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}
+                className={`flex flex-col group relative select-text ${isMe ? 'items-end' : 'items-start'}`}
+                onTouchStart={(e) => handleTouchStart(msg, e)}
+                onTouchMove={handleTouchMove}
+                onTouchEnd={handleTouchEnd}
+                onContextMenu={(e) => handleContextMenu(msg, e)}
               >
-                <div
-                  className={`max-w-[85%] sm:max-w-[75%] px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm break-words ${
-                    isMe
-                      ? 'bg-gradient-to-r from-pink-500 to-indigo-600 text-white rounded-br-xs shadow-pink-500/10'
-                      : 'bg-slate-800 border border-slate-700/60 text-slate-100 rounded-bl-xs'
-                  }`}
-                >
-                  {msg.message_type === 'voice' ? (
-                    <VoiceMessage
-                      message={msg}
-                      isMe={isMe}
-                      formatTime={formatMessageTime}
-                    />
-                  ) : (
-                    <p className="whitespace-pre-wrap">{msg.content}</p>
+                <div className="flex items-center gap-1 max-w-[85%] sm:max-w-[75%]">
+                  {/* Left 3-dot trigger for outgoing messages */}
+                  {isMe && !msg.is_deleted && (
+                    <button
+                      type="button"
+                      onClick={(e) => handleThreeDotClick(msg, e)}
+                      className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800/60 transition-opacity cursor-pointer shrink-0"
+                      title="Message options"
+                      aria-label="Message options"
+                    >
+                      <MoreVertical className="w-3.5 h-3.5" />
+                    </button>
                   )}
+
                   <div
-                    className={`flex items-center justify-end gap-1 text-[10px] mt-1 ${
-                      isMe ? 'text-pink-100/70' : 'text-slate-400'
+                    className={`px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm break-words relative ${
+                      isMe
+                        ? 'bg-gradient-to-r from-pink-500 to-indigo-600 text-white rounded-br-xs shadow-pink-500/10'
+                        : 'bg-slate-800 border border-slate-700/60 text-slate-100 rounded-bl-xs'
                     }`}
                   >
-                    <span>{formatMessageTime(msg.created_at)}</span>
-                    {isMe && (
-                      <span className="ml-1 inline-flex items-center">
-                        {msg.status === 'failed' ? (
+                    {msg.is_deleted ? (
+                      <div className="flex items-center gap-1.5 italic text-xs opacity-70 py-0.5">
+                        <Ban className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        <span>This message was deleted</span>
+                      </div>
+                    ) : isEditing ? (
+                      <div className="flex flex-col gap-2 min-w-[200px] sm:min-w-[260px] py-1">
+                        <textarea
+                          value={editingText}
+                          onChange={(e) => setEditingText(e.target.value)}
+                          className="w-full p-2 text-xs sm:text-sm bg-slate-950/70 border border-pink-400/50 rounded-xl text-white resize-none focus:outline-none focus:ring-1 focus:ring-pink-400"
+                          rows={2}
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              handleSaveEdit(msg.id);
+                            }
+                          }}
+                        />
+                        <div className="flex justify-end gap-1.5">
                           <button
                             type="button"
-                            onClick={() => handleRetry(msg)}
-                            className="inline-flex items-center gap-1 text-rose-300 hover:text-white bg-rose-500/20 hover:bg-rose-500/30 px-1.5 py-0.5 rounded text-[10px] cursor-pointer transition-colors"
-                            title="Sending failed. Click to retry."
-                            aria-label="Retry sending message"
+                            onClick={handleCancelEdit}
+                            className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-slate-700/60 text-slate-300 hover:bg-slate-700 transition-colors cursor-pointer"
                           >
-                            <AlertCircle className="w-3 h-3 text-rose-400" />
-                            <span className="font-semibold underline">Retry</span>
+                            Cancel
                           </button>
-                        ) : msg.status === 'sending' ? (
-                          <Clock className="w-3 h-3 animate-spin text-pink-200/50" title="Sending..." />
-                        ) : msg.status === 'seen' ? (
-                          <CheckCheck className="w-3.5 h-3.5 text-pink-200 font-bold" title="Seen" />
-                        ) : msg.status === 'delivered' ? (
-                          <CheckCheck className="w-3.5 h-3.5 text-slate-400/80" title="Delivered" />
-                        ) : (
-                          <Check className="w-3.5 h-3.5 text-pink-200/60" title="Sent" />
-                        )}
-                      </span>
+                          <button
+                            type="button"
+                            onClick={() => handleSaveEdit(msg.id)}
+                            className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-pink-500 hover:bg-pink-600 text-white shadow transition-colors cursor-pointer"
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    ) : msg.message_type === 'voice' ? (
+                      <VoiceMessage
+                        message={msg}
+                        isMe={isMe}
+                        formatTime={formatMessageTime}
+                      />
+                    ) : (
+                      <p className="whitespace-pre-wrap">{msg.content}</p>
                     )}
+
+                    <div
+                      className={`flex items-center justify-end gap-1 text-[10px] mt-1 ${
+                        isMe ? 'text-pink-100/70' : 'text-slate-400'
+                      }`}
+                    >
+                      <span>{formatMessageTime(msg.created_at)}</span>
+                      {msg.is_edited && !msg.is_deleted && (
+                        <span className="italic text-[9px] opacity-80">(edited)</span>
+                      )}
+                      {isMe && !msg.is_deleted && (
+                        <span className="ml-1 inline-flex items-center">
+                          {msg.status === 'failed' ? (
+                            <button
+                              type="button"
+                              onClick={() => handleRetry(msg)}
+                              className="inline-flex items-center gap-1 text-rose-300 hover:text-white bg-rose-500/20 hover:bg-rose-500/30 px-1.5 py-0.5 rounded text-[10px] cursor-pointer transition-colors"
+                              title="Sending failed. Click to retry."
+                              aria-label="Retry sending message"
+                            >
+                              <AlertCircle className="w-3 h-3 text-rose-400" />
+                              <span className="font-semibold underline">Retry</span>
+                            </button>
+                          ) : msg.status === 'sending' ? (
+                            <Clock className="w-3 h-3 animate-spin text-pink-200/50" title="Sending..." />
+                          ) : msg.status === 'seen' ? (
+                            <CheckCheck className="w-3.5 h-3.5 text-pink-200 font-bold" title="Seen" />
+                          ) : msg.status === 'delivered' ? (
+                            <CheckCheck className="w-3.5 h-3.5 text-slate-400/80" title="Delivered" />
+                          ) : (
+                            <Check className="w-3.5 h-3.5 text-pink-200/60" title="Sent" />
+                          )}
+                        </span>
+                      )}
+                    </div>
                   </div>
+
+                  {/* Right 3-dot trigger for incoming messages */}
+                  {!isMe && !msg.is_deleted && (
+                    <button
+                      type="button"
+                      onClick={(e) => handleThreeDotClick(msg, e)}
+                      className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800/60 transition-opacity cursor-pointer shrink-0"
+                      title="Message options"
+                      aria-label="Message options"
+                    >
+                      <MoreVertical className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -933,6 +1250,107 @@ export const Chat = () => {
           )}
         </form>
       )}
+
+      {/* Floating Action Menu */}
+      {activeMenuMessage && menuPosition && (
+        <div
+          style={{ top: `${menuPosition.y}px`, left: `${menuPosition.x}px` }}
+          className="fixed z-50 min-w-[150px] bg-slate-900/95 border border-slate-700/80 rounded-xl shadow-2xl py-1 text-xs text-slate-200 backdrop-blur-md animate-in fade-in zoom-in-95 duration-100"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {activeMenuMessage.message_type === 'text' && activeMenuMessage.content && (
+            <button
+              type="button"
+              onClick={() => handleCopyMessage(activeMenuMessage)}
+              className="w-full px-3.5 py-2 text-left hover:bg-slate-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+            >
+              <Copy className="w-3.5 h-3.5 text-slate-400" />
+              <span>Copy</span>
+            </button>
+          )}
+
+          {activeMenuMessage.sender_profile_id === profile?.profile_id &&
+            activeMenuMessage.message_type === 'text' &&
+            !activeMenuMessage.is_deleted && (
+              <button
+                type="button"
+                onClick={() => handleStartEdit(activeMenuMessage)}
+                className="w-full px-3.5 py-2 text-left hover:bg-slate-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+              >
+                <Edit2 className="w-3.5 h-3.5 text-pink-400" />
+                <span>Edit</span>
+              </button>
+            )}
+
+          {!activeMenuMessage.is_deleted && (
+            <button
+              type="button"
+              onClick={() => handlePromptDelete(activeMenuMessage)}
+              className="w-full px-3.5 py-2 text-left hover:bg-rose-500/10 text-rose-400 flex items-center gap-2.5 cursor-pointer transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Delete...</span>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      <Modal
+        isOpen={isDeleteModalOpen}
+        onClose={() => {
+          if (!isDeleting) {
+            setIsDeleteModalOpen(false);
+            setDeletingMessage(null);
+          }
+        }}
+        title="Delete Message"
+      >
+        {deletingMessage && (
+          <div className="space-y-4">
+            <p className="text-sm text-slate-300">
+              {deletingMessage.sender_profile_id === profile?.profile_id
+                ? 'Are you sure you want to delete this message? You can delete it just for yourself or for everyone in this chat.'
+                : 'Are you sure you want to delete this message for yourself? Other participants will still be able to see it.'}
+            </p>
+
+            <div className="flex flex-col gap-2 pt-2">
+              {deletingMessage.sender_profile_id === profile?.profile_id && (
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => handleConfirmDelete('everyone')}
+                  className="w-full py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 active:scale-[0.99] text-white font-medium text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-rose-600/20 disabled:opacity-50"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>{isDeleting ? 'Deleting...' : 'Delete for Everyone'}</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => handleConfirmDelete('me')}
+                className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 active:scale-[0.99] text-slate-200 font-medium text-xs sm:text-sm flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+              >
+                <span>{isDeleting ? 'Deleting...' : 'Delete for Me'}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => {
+                  setIsDeleteModalOpen(false);
+                  setDeletingMessage(null);
+                }}
+                className="w-full py-2 px-4 rounded-xl text-slate-400 hover:text-white font-medium text-xs sm:text-sm transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

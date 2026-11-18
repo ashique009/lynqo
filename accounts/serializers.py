@@ -101,9 +101,9 @@ class MessageSerializer(serializers.ModelSerializer):
             'sender_profile_id', 'sender_display_name',
             'content', 'message_type', 'audio_url', 'duration_seconds',
             'file_size', 'audio_format',
-            'status', 'is_read', 'created_at'
+            'status', 'is_read', 'is_edited', 'is_deleted', 'created_at'
         ]
-        read_only_fields = ['id', 'status', 'is_read', 'created_at', 'audio_url']
+        read_only_fields = ['id', 'status', 'is_read', 'is_edited', 'is_deleted', 'created_at', 'audio_url']
 
     def get_sender_profile_id(self, obj):
         profile = getattr(obj.sender, 'profile', None)
@@ -114,9 +114,18 @@ class MessageSerializer(serializers.ModelSerializer):
         return profile.display_name if profile else obj.sender.username
 
     def get_audio_url(self, obj):
+        if getattr(obj, 'is_deleted', False):
+            return None
         if obj.message_type == 'voice' and (obj.audio_file or obj.audio_storage_id):
             return f"/api/auth/conversations/{obj.conversation_id}/messages/{obj.id}/audio/"
         return None
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.is_deleted:
+            data['content'] = ''
+            data['audio_url'] = None
+        return data
 
 
 class ConversationSerializer(serializers.ModelSerializer):

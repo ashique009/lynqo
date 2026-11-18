@@ -6,7 +6,8 @@ from .views import (
     OutgoingRequestsView, AcceptConnectRequestView, DeclineConnectRequestView,
     CancelConnectRequestView, ConnectedProfilesView,
     ConversationListView, ConversationDetailView, MessageListView,
-    SendMessageView, VoiceMessageUploadView, VoiceMessageAudioView
+    SendMessageView, VoiceMessageUploadView, VoiceMessageAudioView,
+    MessageEditView, MessageDeleteView
 )
 
 urlpatterns = [
@@ -36,4 +37,7 @@ urlpatterns = [
     path('conversations/<int:conversation_id>/messages/send/', SendMessageView.as_view(), name='conversation-send-message'),
     path('conversations/<int:conversation_id>/messages/voice/', VoiceMessageUploadView.as_view(), name='conversation-voice-upload'),
     path('conversations/<int:conversation_id>/messages/<int:message_id>/audio/', VoiceMessageAudioView.as_view(), name='conversation-voice-audio'),
+    path('conversations/<int:conversation_id>/messages/<int:message_id>/edit/', MessageEditView.as_view(), name='conversation-message-edit'),
+    path('conversations/<int:conversation_id>/messages/<int:message_id>/delete/', MessageDeleteView.as_view(), name='conversation-message-delete'),
+    path('conversations/<int:conversation_id>/messages/<int:message_id>/', MessageEditView.as_view(), name='conversation-message-action'),
 ]

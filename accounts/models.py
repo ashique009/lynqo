@@ -175,6 +175,7 @@ class Message(models.Model):
     is_read = models.BooleanField(default=False)
     is_edited = models.BooleanField(default=False)
     is_deleted = models.BooleanField(default=False)
+    deleted_for = models.ManyToManyField(settings.AUTH_USER_MODEL, blank=True, related_name='hidden_messages')
 
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)

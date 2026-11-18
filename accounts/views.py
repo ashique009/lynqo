@@ -722,7 +722,7 @@ class MessageListView(APIView):
         before_id = request.query_params.get('before_id')
         since_id = request.query_params.get('since_id')
 
-        qs = Message.objects.filter(conversation=conv).select_related('sender__profile', 'conversation')
+        qs = Message.objects.filter(conversation=conv).exclude(deleted_for=request.user).select_related('sender__profile', 'conversation')
 
         if before_id:
             qs = qs.filter(id__lt=int(before_id))
@@ -832,6 +832,137 @@ class SendMessageView(APIView):
             'success': True,
             'message': msg_data,
         }, status=status.HTTP_201_CREATED)
+
+
+class MessageEditView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def put(self, request, conversation_id, message_id):
+        return self._edit(request, conversation_id, message_id)
+
+    def patch(self, request, conversation_id, message_id):
+        return self._edit(request, conversation_id, message_id)
+
+    def _edit(self, request, conversation_id, message_id):
+        try:
+            conv = Conversation.objects.get(id=conversation_id)
+        except Conversation.DoesNotExist:
+            return Response({'success': False, 'message': 'Conversation not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if conv.participant_1_id != request.user.id and conv.participant_2_id != request.user.id:
+            return Response({'success': False, 'message': 'Unauthorized.'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            msg = Message.objects.select_related('sender__profile', 'conversation').get(id=message_id, conversation=conv)
+        except Message.DoesNotExist:
+            return Response({'success': False, 'message': 'Message not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if msg.sender_id != request.user.id:
+            return Response({'success': False, 'message': 'You can only edit your own messages.'}, status=status.HTTP_403_FORBIDDEN)
+
+        if msg.message_type != 'text':
+            return Response({'success': False, 'message': 'Only text messages can be edited.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if msg.is_deleted:
+            return Response({'success': False, 'message': 'Cannot edit a deleted message.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        new_content = (request.data.get('content') or '').strip()
+        if not new_content:
+            return Response({'success': False, 'message': 'Message content cannot be empty.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        msg.content = new_content
+        msg.is_edited = True
+        msg.save(update_fields=['content', 'is_edited', 'updated_at'])
+
+        msg_data = MessageSerializer(msg, context={'request': request}).data
+
+        # Broadcast update over WebSocket
+        channel_layer = get_channel_layer()
+        if channel_layer:
+            async_to_sync(channel_layer.group_send)(
+                f"conv_{conv.id}",
+                {
+                    'type': 'broadcast_message_edited',
+                    'message': msg_data,
+                }
+            )
+
+        return Response({
+            'success': True,
+            'message': msg_data,
+        }, status=status.HTTP_200_OK)
+
+
+class MessageDeleteView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request, conversation_id, message_id):
+        try:
+            conv = Conversation.objects.get(id=conversation_id)
+        except Conversation.DoesNotExist:
+            return Response({'success': False, 'message': 'Conversation not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if conv.participant_1_id != request.user.id and conv.participant_2_id != request.user.id:
+            return Response({'success': False, 'message': 'Unauthorized.'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            msg = Message.objects.get(id=message_id, conversation=conv)
+        except Message.DoesNotExist:
+            return Response({'success': False, 'message': 'Message not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        delete_type = (request.query_params.get('type') or request.data.get('type') or 'everyone').lower()
+
+        if delete_type == 'me':
+            msg.deleted_for.add(request.user)
+            return Response({
+                'success': True,
+                'message_id': msg.id,
+                'delete_type': 'me',
+            }, status=status.HTTP_200_OK)
+
+        elif delete_type == 'everyone':
+            if msg.sender_id != request.user.id:
+                return Response({'success': False, 'message': 'Only the sender can delete a message for everyone.'}, status=status.HTTP_403_FORBIDDEN)
+
+            msg.is_deleted = True
+            msg.content = ''
+            if msg.message_type == 'voice':
+                if msg.audio_storage_id and getattr(settings, 'CLOUDINARY_CLOUD_NAME', None):
+                    try:
+                        import cloudinary.uploader
+                        cloudinary.uploader.destroy(msg.audio_storage_id, resource_type='video', type='authenticated')
+                    except Exception as cl_err:
+                        logger.warning("Failed to destroy Cloudinary audio asset: %s", cl_err)
+                msg.audio_storage_id = None
+                if msg.audio_file:
+                    try:
+                        msg.audio_file.delete(save=False)
+                    except Exception:
+                        pass
+
+            msg.save(update_fields=['is_deleted', 'content', 'audio_storage_id', 'audio_file', 'updated_at'])
+
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    f"conv_{conv.id}",
+                    {
+                        'type': 'broadcast_message_deleted',
+                        'message_id': msg.id,
+                        'conversation_id': conv.id,
+                        'delete_type': 'everyone',
+                    }
+                )
+
+            return Response({
+                'success': True,
+                'message_id': msg.id,
+                'delete_type': 'everyone',
+            }, status=status.HTTP_200_OK)
+
+        else:
+            return Response({'success': False, 'message': 'Invalid delete type. Must be "me" or "everyone".'}, status=status.HTTP_400_BAD_REQUEST)
+
 
 
 ALLOWED_AUDIO_MIMES = {

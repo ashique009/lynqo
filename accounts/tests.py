@@ -1032,6 +1032,204 @@ class DirectMessagingAndSearchTests(BaseTestCase):
         self.assertFalse(res.json()['success'])
 
 
+class MessageEditDeleteTests(BaseTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client = Client()
+
+        # Create Alice
+        res_a = self.client.post('/api/auth/profile/create/', {'display_name': 'Alice'})
+        self.assertEqual(res_a.status_code, 201)
+        self.token_a = res_a.json()['token']
+        self.profile_a = res_a.json()['profile']
+
+        # Create Bob
+        res_b = self.client.post('/api/auth/profile/create/', {'display_name': 'Bob'})
+        self.assertEqual(res_b.status_code, 201)
+        self.token_b = res_b.json()['token']
+        self.profile_b = res_b.json()['profile']
+
+        # Alice creates conversation with Bob
+        res_conv = self.client.post(
+            '/api/auth/conversations/',
+            data=json.dumps({'profile_id': self.profile_b['profile_id']}),
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+        )
+        self.assertEqual(res_conv.status_code, 201)
+        self.conv_id = res_conv.json()['conversation']['id']
+
+        # Alice sends a message
+        res_msg = self.client.post(
+            f"/api/auth/conversations/{self.conv_id}/messages/send/",
+            data=json.dumps({
+                'content': 'Original message from Alice',
+                'client_message_id': 'cmsg-original-001'
+            }),
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+        )
+        self.assertEqual(res_msg.status_code, 201)
+        self.msg_id = res_msg.json()['message']['id']
+
+    def test_message_edit_by_sender_success(self):
+        """Sender can edit their own text message."""
+        res = self.client.put(
+            f"/api/auth/conversations/{self.conv_id}/messages/{self.msg_id}/edit/",
+            data=json.dumps({'content': 'Updated message content'}),
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertTrue(data['success'])
+        self.assertEqual(data['message']['content'], 'Updated message content')
+        self.assertTrue(data['message']['is_edited'])
+
+        # Verify DB
+        msg = Message.objects.get(id=self.msg_id)
+        self.assertEqual(msg.content, 'Updated message content')
+        self.assertTrue(msg.is_edited)
+
+    def test_message_edit_by_recipient_forbidden(self):
+        """Recipient cannot edit the sender's message."""
+        res = self.client.put(
+            f"/api/auth/conversations/{self.conv_id}/messages/{self.msg_id}/edit/",
+            data=json.dumps({'content': 'Tampered by Bob'}),
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f"Bearer {self.token_b}"
+        )
+        self.assertEqual(res.status_code, 403)
+        self.assertFalse(res.json()['success'])
+
+        # Verify DB unchanged
+        msg = Message.objects.get(id=self.msg_id)
+        self.assertEqual(msg.content, 'Original message from Alice')
+        self.assertFalse(msg.is_edited)
+
+    def test_message_edit_empty_content_rejected(self):
+        """Editing to empty or whitespace content is rejected."""
+        res = self.client.put(
+            f"/api/auth/conversations/{self.conv_id}/messages/{self.msg_id}/edit/",
+            data=json.dumps({'content': '   '}),
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(res.json()['success'])
+
+    def test_message_edit_voice_message_rejected(self):
+        """Editing a voice message is forbidden."""
+        user_a = User.objects.get(username=self.profile_a['profile_id'])
+        conv = Conversation.objects.get(id=self.conv_id)
+        voice_msg = Message.objects.create(
+            conversation=conv,
+            sender=user_a,
+            message_type='voice',
+            duration_seconds=5
+        )
+        res = self.client.put(
+            f"/api/auth/conversations/{self.conv_id}/messages/{voice_msg.id}/edit/",
+            data=json.dumps({'content': 'New text for voice'}),
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+        )
+        self.assertEqual(res.status_code, 400)
+        self.assertFalse(res.json()['success'])
+
+    def test_message_edit_deleted_message_rejected(self):
+        """Editing an already deleted message is rejected."""
+        msg = Message.objects.get(id=self.msg_id)
+        msg.is_deleted = True
+        msg.save()
+
+        res = self.client.put(
+            f"/api/auth/conversations/{self.conv_id}/messages/{self.msg_id}/edit/",
+            data=json.dumps({'content': 'Trying to resurrect'}),
+            content_type='application/json',
+            HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+        )
+        self.assertEqual(res.status_code, 400)
+
+    def test_message_delete_for_me_only_affects_requester(self):
+        """Delete for Me hides message only for the requester; other user still sees it."""
+        # Bob deletes Alice's message for himself
+        res_del = self.client.delete(
+            f"/api/auth/conversations/{self.conv_id}/messages/{self.msg_id}/delete/?type=me",
+            HTTP_AUTHORIZATION=f"Bearer {self.token_b}"
+        )
+        self.assertEqual(res_del.status_code, 200)
+        self.assertTrue(res_del.json()['success'])
+
+        # Bob fetches messages: msg_id should NOT be in the list
+        res_bob_msgs = self.client.get(
+            f"/api/auth/conversations/{self.conv_id}/messages/",
+            HTTP_AUTHORIZATION=f"Bearer {self.token_b}"
+        )
+        bob_ids = [m['id'] for m in res_bob_msgs.json()['messages']]
+        self.assertNotIn(self.msg_id, bob_ids)
+
+        # Alice fetches messages: msg_id SHOULD be in the list
+        res_alice_msgs = self.client.get(
+            f"/api/auth/conversations/{self.conv_id}/messages/",
+            HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+        )
+        alice_ids = [m['id'] for m in res_alice_msgs.json()['messages']]
+        self.assertIn(self.msg_id, alice_ids)
+
+        # In DB, message is not marked is_deleted
+        msg = Message.objects.get(id=self.msg_id)
+        self.assertFalse(msg.is_deleted)
+        user_b = User.objects.get(username=self.profile_b['profile_id'])
+        self.assertTrue(msg.deleted_for.filter(id=user_b.id).exists())
+
+    def test_message_delete_for_everyone_by_sender_success(self):
+        """Delete for Everyone by sender marks message deleted, clears content, and notifies both."""
+        res_del = self.client.delete(
+            f"/api/auth/conversations/{self.conv_id}/messages/{self.msg_id}/delete/?type=everyone",
+            HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+        )
+        self.assertEqual(res_del.status_code, 200)
+        self.assertTrue(res_del.json()['success'])
+
+        # Check in DB
+        msg = Message.objects.get(id=self.msg_id)
+        self.assertTrue(msg.is_deleted)
+        self.assertEqual(msg.content, '')
+
+        # Alice fetches messages: is_deleted is true, content is empty
+        res_alice = self.client.get(
+            f"/api/auth/conversations/{self.conv_id}/messages/",
+            HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+        )
+        alice_msg = next(m for m in res_alice.json()['messages'] if m['id'] == self.msg_id)
+        self.assertTrue(alice_msg['is_deleted'])
+        self.assertEqual(alice_msg['content'], '')
+
+        # Bob fetches messages: is_deleted is true, content is empty
+        res_bob = self.client.get(
+            f"/api/auth/conversations/{self.conv_id}/messages/",
+            HTTP_AUTHORIZATION=f"Bearer {self.token_b}"
+        )
+        bob_msg = next(m for m in res_bob.json()['messages'] if m['id'] == self.msg_id)
+        self.assertTrue(bob_msg['is_deleted'])
+        self.assertEqual(bob_msg['content'], '')
+
+    def test_message_delete_for_everyone_by_recipient_forbidden(self):
+        """Recipient cannot delete a message for everyone."""
+        res = self.client.delete(
+            f"/api/auth/conversations/{self.conv_id}/messages/{self.msg_id}/delete/?type=everyone",
+            HTTP_AUTHORIZATION=f"Bearer {self.token_b}"
+        )
+        self.assertEqual(res.status_code, 403)
+        self.assertFalse(res.json()['success'])
+
+        # Verify DB
+        msg = Message.objects.get(id=self.msg_id)
+        self.assertFalse(msg.is_deleted)
+
+
+
 
 
 

@@ -50,6 +50,14 @@ export const chatService = {
       },
     });
   },
+
+  async editMessage(conversationId, messageId, content) {
+    return client.put(`/api/auth/conversations/${conversationId}/messages/${messageId}/edit/`, { content });
+  },
+
+  async deleteMessage(conversationId, messageId, type = 'everyone') {
+    return client.delete(`/api/auth/conversations/${conversationId}/messages/${messageId}/delete/?type=${type}`);
+  },
 };
 
 export default chatService;

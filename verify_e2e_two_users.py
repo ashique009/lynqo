@@ -277,6 +277,51 @@ async def run_e2e_verification():
     assert history_messages[2]['duration_seconds'] == 5
     print(f"  ✓ {len(history_messages)} messages (text + voice) persisted in PostgreSQL and retrieved in chronological order")
 
+    # 11.5 Verify Message Edit and Delete Functionality
+    print("\n[Step 11.5] Verifying Message Edit & Delete (for me & for everyone)...")
+    first_msg_id = history_messages[0]['id']
+
+    # Alice edits her text message
+    res_edit = await sync_to_async(client_a.put)(
+        f'/api/auth/conversations/{conv_id}/messages/{first_msg_id}/edit/',
+        data=json.dumps({'content': 'Hey Bob! Real-time chat works seamlessly! (Edited)'}),
+        content_type='application/json'
+    )
+    assert res_edit.status_code == 200
+    assert res_edit.json()['message']['is_edited'] is True
+    assert res_edit.json()['message']['content'] == 'Hey Bob! Real-time chat works seamlessly! (Edited)'
+    print("  ✓ Alice successfully edited message: is_edited=True, content updated")
+
+    # Alice deletes voice message for everyone
+    res_del_everyone = await sync_to_async(client_a.delete)(
+        f'/api/auth/conversations/{conv_id}/messages/{voice_msg_id}/delete/?type=everyone'
+    )
+    assert res_del_everyone.status_code == 200
+    print("  ✓ Alice successfully deleted voice message for everyone")
+
+    # Bob deletes Alice's edited message for himself only
+    res_del_me = await sync_to_async(client_b.delete)(
+        f'/api/auth/conversations/{conv_id}/messages/{first_msg_id}/delete/?type=me'
+    )
+    assert res_del_me.status_code == 200
+    print("  ✓ Bob successfully deleted message 'for me'")
+
+    # Bob fetches messages: first_msg_id is excluded; voice message has is_deleted=True
+    res_bob_msgs = await sync_to_async(client_b.get)(f'/api/auth/conversations/{conv_id}/messages/')
+    bob_ids = [m['id'] for m in res_bob_msgs.json()['messages']]
+    assert first_msg_id not in bob_ids, "Message deleted 'for me' should not be visible to Bob"
+    voice_msg_bob = next(m for m in res_bob_msgs.json()['messages'] if m['id'] == voice_msg_id)
+    assert voice_msg_bob['is_deleted'] is True
+    print("  ✓ Bob message list verifies 'delete for me' exclusion and 'delete for everyone' tombstone")
+
+    # Alice fetches messages: first_msg_id is still present and edited for Alice
+    res_alice_msgs = await sync_to_async(client_a.get)(f'/api/auth/conversations/{conv_id}/messages/')
+    alice_ids = [m['id'] for m in res_alice_msgs.json()['messages']]
+    assert first_msg_id in alice_ids, "Message deleted for Bob must still be visible to Alice"
+    first_msg_alice = next(m for m in res_alice_msgs.json()['messages'] if m['id'] == first_msg_id)
+    assert first_msg_alice['content'] == 'Hey Bob! Real-time chat works seamlessly! (Edited)'
+    print("  ✓ Alice message list verifies message remained intact after Bob's 'delete for me'")
+
     # 12. Security Test: Unauthorized Third Party (User C)
     print("\n[Step 12] Security Test: Unauthorized third party attempts access...")
     client_c = Client()

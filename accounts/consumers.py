@@ -163,6 +163,20 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             'message': event['message'],
         })
 
+    async def broadcast_message_edited(self, event):
+        await self.send_json({
+            'type': 'message_edited',
+            'message': event['message'],
+        })
+
+    async def broadcast_message_deleted(self, event):
+        await self.send_json({
+            'type': 'message_deleted',
+            'message_id': event['message_id'],
+            'conversation_id': event['conversation_id'],
+            'delete_type': event.get('delete_type', 'everyone'),
+        })
+
     async def broadcast_conversation_update(self, event):
         await self.send_json({
             'type': 'conversation_update',
@@ -363,6 +377,8 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             'audio_format': getattr(msg, 'audio_format', None),
             'status': msg.status,
             'is_read': msg.is_read,
+            'is_edited': getattr(msg, 'is_edited', False),
+            'is_deleted': getattr(msg, 'is_deleted', False),
             'created_at': msg.created_at.isoformat(),
         }
 
