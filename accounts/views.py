@@ -1023,7 +1023,7 @@ class VoiceMessageUploadView(APIView):
                 {
                     'success': False,
                     'message': 'Failed to process voice recording. Please retry.',
-                    'detail': str(err) if getattr(settings, 'DEBUG', False) else None,
+                    'detail': str(err),
                 },
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
