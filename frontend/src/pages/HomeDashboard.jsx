@@ -11,6 +11,7 @@ import { connectService } from '../services/connectService';
 import { wsService } from '../services/websocketService';
 import { cacheGet, cacheSet } from '../utils/cache';
 import { mergeConversations } from '../utils/conversationUtils';
+import { getOptimizedImageUrl } from '../utils/imageUtils';
 import Loader from '../components/Loader';
 
 export const HomeDashboard = () => {
@@ -23,8 +24,15 @@ export const HomeDashboard = () => {
   const [search, setSearch] = useState('');
   const [isLoading, setIsLoading] = useState(() => !cacheGet('dashboard_conversations'));
   const [copiedId, setCopiedId] = useState(false);
+  const lastFetchTimeRef = React.useRef(0);
 
   const loadData = async (silent = false) => {
+    const now = Date.now();
+    if (silent && now - lastFetchTimeRef.current < 10000) {
+      return; // Skip background refetch if fresh within 10s
+    }
+    lastFetchTimeRef.current = now;
+
     if (!silent && !cacheGet('dashboard_conversations')) {
       setIsLoading(true);
     }
@@ -150,7 +158,13 @@ export const HomeDashboard = () => {
         <div className="flex items-center gap-4">
           <div className="relative w-16 h-16 rounded-2xl overflow-hidden bg-slate-800 border-2 border-pink-500/30 shrink-0 shadow-md">
             {profile?.profile_picture ? (
-              <img src={profile.profile_picture} alt="" className="w-full h-full object-cover" />
+              <img
+                src={getOptimizedImageUrl(profile.profile_picture, { width: 128, height: 128 })}
+                alt=""
+                className="w-full h-full object-cover"
+                loading="lazy"
+                decoding="async"
+              />
             ) : (
               <div className="w-full h-full flex items-center justify-center font-bold text-2xl text-pink-400 bg-pink-500/10">
                 {profile?.display_name?.charAt(0) || 'U'}
@@ -262,9 +276,11 @@ export const HomeDashboard = () => {
                   <div className="relative w-12 h-12 rounded-xl overflow-hidden bg-slate-800 border border-slate-700 shrink-0">
                     {conv.other_participant?.profile_picture ? (
                       <img
-                        src={conv.other_participant.profile_picture}
+                        src={getOptimizedImageUrl(conv.other_participant.profile_picture, { width: 96, height: 96 })}
                         alt=""
                         className="w-full h-full object-cover"
+                        loading="lazy"
+                        decoding="async"
                       />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center font-bold text-pink-400 bg-pink-500/10">

@@ -7,6 +7,7 @@ from channels.layers import get_channel_layer
 from django.conf import settings
 from django.contrib.auth.hashers import make_password, check_password
 from django.db import transaction, models
+from django.core.cache import cache
 from django.http import FileResponse, HttpResponseRedirect
 from django.utils import timezone
 from rest_framework import permissions, status
@@ -608,7 +609,7 @@ class ConversationListView(APIView):
                 distinct=True
             ),
             last_message_id=models.Subquery(
-                Message.objects.filter(conversation=models.OuterRef('pk')).order_by('-created_at', '-id').values('id')[:1]
+                Message.objects.filter(conversation=models.OuterRef('pk')).order_by('-created_at').values('id')[:1]
             )
         ).order_by('-updated_at'))
 
@@ -664,6 +665,21 @@ class ConversationListView(APIView):
 
         with transaction.atomic():
             conv, created = Conversation.get_or_create_between(request.user, target_user)
+
+        # Optimize: fetch fully preloaded conversation to eliminate N+1 serializer queries
+        conv = Conversation.objects.select_related(
+            'participant_1__profile', 'participant_2__profile'
+        ).get(id=conv.id)
+        if created:
+            conv.annotated_unread_count = 0
+            conv.prefetched_last_message = None
+        else:
+            conv.annotated_unread_count = Message.objects.filter(
+                conversation=conv, is_read=False
+            ).exclude(sender=request.user).count()
+            conv.prefetched_last_message = Message.objects.filter(
+                conversation=conv
+            ).select_related('sender__profile').order_by('-created_at').first()
 
         serializer = ConversationSerializer(conv, context={'request': request})
         return Response({
@@ -1191,6 +1207,13 @@ class VoiceMessageAudioView(APIView):
         is_cloudinary = c_cloud and c_key and c_secret and storage_id and not storage_id.startswith('voice_messages/')
 
         if is_cloudinary:
+            cache_key = f"voice_signed_url:{msg.id}"
+            cached_url = cache.get(cache_key)
+            if cached_url:
+                if request.query_params.get('json') == '1':
+                    return Response({'success': True, 'audio_url': cached_url})
+                return HttpResponseRedirect(cached_url)
+
             try:
                 import cloudinary.utils
                 signed_url, _ = cloudinary.utils.cloudinary_url(
@@ -1200,6 +1223,7 @@ class VoiceMessageAudioView(APIView):
                     type='authenticated',
                     expires_at=int(time.time()) + 3600
                 )
+                cache.set(cache_key, signed_url, 1800)  # Cache for 30 minutes
                 if request.query_params.get('json') == '1':
                     return Response({'success': True, 'audio_url': signed_url})
                 return HttpResponseRedirect(signed_url)

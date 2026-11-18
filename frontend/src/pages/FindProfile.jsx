@@ -7,6 +7,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { connectService } from '../services/connectService';
 import { chatService } from '../services/chatService';
+import { getOptimizedImageUrl } from '../utils/imageUtils';
 
 export const FindProfile = () => {
   const { profile } = useAuth();
@@ -261,9 +262,11 @@ export const FindProfile = () => {
                   <div className="relative w-12 h-12 sm:w-14 sm:h-14 rounded-2xl overflow-hidden bg-slate-800 border border-slate-700 shrink-0">
                     {target.profile_picture ? (
                       <img
-                        src={target.profile_picture}
+                        src={getOptimizedImageUrl(target.profile_picture, { width: 112, height: 112 })}
                         alt={target.display_name}
                         className="w-full h-full object-cover"
+                        loading="lazy"
+                        decoding="async"
                       />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center font-bold text-lg sm:text-xl text-pink-400 bg-pink-500/10">

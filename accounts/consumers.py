@@ -3,11 +3,13 @@ from urllib.parse import parse_qs
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
 from django.utils import timezone
+from django.core.cache import cache
 from .models import ProfileSession, Conversation, Message, ConnectRequest, User
 
 
 class ChatConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
+        self.joined_groups = set()
         self.user = await self.authenticate_connection()
         if not self.user:
             await self.close(code=4001)
@@ -15,6 +17,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
 
         self.user_group = f"user_{self.user.id}"
         await self.channel_layer.group_add(self.user_group, self.channel_name)
+        self.joined_groups.add(self.user_group)
         await self.accept()
 
         # Update presence and broadcast online status to contacts
@@ -26,8 +29,10 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             if hasattr(self, 'user') and self.user:
                 await self.set_online_status(False)
                 await self.broadcast_presence(False)
-                if hasattr(self, 'user_group'):
-                    await self.channel_layer.group_discard(self.user_group, self.channel_name)
+                if hasattr(self, 'joined_groups'):
+                    for group_name in list(self.joined_groups):
+                        await self.channel_layer.group_discard(group_name, self.channel_name)
+                    self.joined_groups.clear()
         except Exception:
             pass
 
@@ -43,6 +48,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             if await self.is_participant(conv_id):
                 group_name = f"conv_{conv_id}"
                 await self.channel_layer.group_add(group_name, self.channel_name)
+                self.joined_groups.add(group_name)
                 await self.send_json({'type': 'joined_conversation', 'conversation_id': conv_id})
 
         elif msg_type == 'leave_conversation':
@@ -50,6 +56,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             if conv_id:
                 group_name = f"conv_{conv_id}"
                 await self.channel_layer.group_discard(group_name, self.channel_name)
+                self.joined_groups.discard(group_name)
 
         elif msg_type == 'chat_message':
             await self.handle_chat_message(content)
@@ -72,14 +79,12 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             await self.send_json({'type': 'error', 'message': 'Missing conversation_id or content'})
             return
 
-        # Check authorization and connection status
-        can_message, recipient_id, error_reason = await self.can_user_message(conv_id)
-        if not can_message:
+        msg_data, recipient_id, is_new, error_reason = await self.process_and_save_chat_message(
+            conv_id, text, client_msg_id
+        )
+        if error_reason:
             await self.send_json({'type': 'error', 'message': error_reason})
             return
-
-        # Save or get deduplicated message
-        msg_data, is_new = await self.save_message(conv_id, text, client_msg_id)
 
         # Broadcast to conversation room
         await self.channel_layer.group_send(
@@ -246,6 +251,14 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         if not token:
             return None
 
+        # Check session cache first to eliminate DB lookup on WS handshake
+        cache_key = f"auth_session:{token}"
+        cached_data = cache.get(cache_key)
+        if cached_data is not None:
+            user, session = cached_data
+            if not getattr(user, 'is_banned', False):
+                return user
+
         try:
             session = ProfileSession.objects.select_related('user', 'user__profile').get(
                 token=token,
@@ -253,6 +266,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             )
             if session.user.is_banned:
                 return None
+            cache.set(cache_key, (session.user, session), 60)
             return session.user
         except ProfileSession.DoesNotExist:
             return None
@@ -316,8 +330,22 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         return True, other_user.id, None
 
     @database_sync_to_async
-    def save_message(self, conv_id, content, client_msg_id):
-        conv = Conversation.objects.get(id=conv_id)
+    def process_and_save_chat_message(self, conv_id, content, client_msg_id):
+        """
+        Unified authorization, deduplication, and persistence in a single DB transaction.
+        Eliminates redundant Conversation lookups and multiple round trips.
+        """
+        try:
+            conv = Conversation.objects.select_related('participant_1', 'participant_2').get(id=conv_id)
+        except (Conversation.DoesNotExist, ValueError):
+            return None, None, False, "Conversation not found"
+
+        if conv.participant_1_id != self.user.id and conv.participant_2_id != self.user.id:
+            return None, None, False, "Unauthorized: Not a participant in this conversation"
+
+        other_user = conv.get_other_participant(self.user)
+        if getattr(self.user, 'is_banned', False) or getattr(other_user, 'is_banned', False):
+            return None, None, False, "Account restricted."
 
         # Deduplication
         if client_msg_id:
@@ -327,7 +355,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                 client_message_id=client_msg_id
             ).first()
             if existing:
-                return self._format_message(existing), False
+                return self._format_message(existing), other_user.id, False, None
 
         msg = Message.objects.create(
             conversation=conv,
@@ -338,7 +366,12 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         )
         conv.updated_at = msg.created_at
         conv.save(update_fields=['updated_at'])
-        return self._format_message(msg), True
+        return self._format_message(msg), other_user.id, True, None
+
+    @database_sync_to_async
+    def save_message(self, conv_id, content, client_msg_id):
+        msg_data, _, is_new, _ = self.process_and_save_chat_message(conv_id, content, client_msg_id)
+        return msg_data, is_new
 
     @database_sync_to_async
     def mark_messages_as_delivered(self, conv_id, message_ids):

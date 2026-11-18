@@ -16,6 +16,7 @@ import VoiceMessage from '../components/VoiceMessage';
 import useVoiceRecorder from '../hooks/useVoiceRecorder';
 import Loader from '../components/Loader';
 import Modal from '../components/Modal';
+import { getOptimizedImageUrl } from '../utils/imageUtils';
 
 const formatRecordingTime = (sec) => {
   if (!sec || isNaN(sec)) return '0:00';
@@ -116,7 +117,22 @@ export const Chat = () => {
     const loadInitialData = async () => {
       try {
         const cachedConvData = location.state?.conversation || cacheGet(`conv_detail_${currentId}`);
-        const msgPromise = chatService.getMessages(currentId, { limit: 50 });
+        const cachedMsgs = cacheGet(`conv_msgs_${currentId}`);
+
+        // If we have cached messages, perform a fast delta sync (since_id) rather than full 50-message refetch
+        let msgPromise;
+        if (cachedMsgs && cachedMsgs.length > 0) {
+          const realMsgs = cachedMsgs.filter((m) => m.id && !String(m.id).startsWith('temp-'));
+          const latestId = realMsgs.length > 0 ? Math.max(...realMsgs.map((m) => Number(m.id))) : null;
+          if (latestId && isFinite(latestId)) {
+            msgPromise = chatService.getMessages(currentId, { since_id: latestId });
+          } else {
+            msgPromise = chatService.getMessages(currentId, { limit: 50 });
+          }
+        } else {
+          msgPromise = chatService.getMessages(currentId, { limit: 50 });
+        }
+
         const convPromise = cachedConvData
           ? Promise.resolve({ success: true, conversation: cachedConvData })
           : chatService.getConversationDetail(currentId);
@@ -134,18 +150,22 @@ export const Chat = () => {
         }
         if (msgRes.success) {
           const msgs = msgRes.messages || [];
-          setMessages((prev) => {
-            if (!isCurrent || activeConvIdRef.current !== currentId) return prev;
-            const merged = mergeMessages(prev, msgs);
-            cacheSet(`conv_msgs_${currentId}`, merged, 60);
-            return merged;
-          });
-          setHasMore(msgRes.has_more);
+          if (msgs.length > 0) {
+            setMessages((prev) => {
+              if (!isCurrent || activeConvIdRef.current !== currentId) return prev;
+              const merged = mergeMessages(prev, msgs);
+              cacheSet(`conv_msgs_${currentId}`, merged, 60);
+              return merged;
+            });
 
-          // Acknowledge delivered for incoming unread messages
-          const incomingUnread = msgs.filter((m) => m.sender_profile_id !== profile?.profile_id && m.status === 'sent');
-          if (incomingUnread.length > 0) {
-            wsService.markDelivered(currentId, incomingUnread.map((m) => m.id));
+            // Acknowledge delivered for incoming unread messages
+            const incomingUnread = msgs.filter((m) => m.sender_profile_id !== profile?.profile_id && m.status === 'sent');
+            if (incomingUnread.length > 0) {
+              wsService.markDelivered(currentId, incomingUnread.map((m) => m.id));
+            }
+          }
+          if (msgRes.has_more !== undefined) {
+            setHasMore(msgRes.has_more);
           }
         }
       } catch (err) {
@@ -864,7 +884,13 @@ export const Chat = () => {
 
           <div className="relative w-10 h-10 sm:w-11 sm:h-11 rounded-xl overflow-hidden bg-slate-800 border border-slate-700 shrink-0">
             {otherUser?.profile_picture ? (
-              <img src={otherUser.profile_picture} alt="" className="w-full h-full object-cover" />
+              <img
+                src={getOptimizedImageUrl(otherUser.profile_picture, { width: 88, height: 88 })}
+                alt=""
+                className="w-full h-full object-cover"
+                loading="lazy"
+                decoding="async"
+              />
             ) : (
               <div className="w-full h-full flex items-center justify-center font-bold text-base sm:text-lg text-pink-400 bg-pink-500/10">
                 {otherUser?.display_name?.charAt(0) || 'U'}

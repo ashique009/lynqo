@@ -4,6 +4,7 @@ import { Users, MessageSquare, Search, UserPlus } from 'lucide-react';
 import { connectService } from '../services/connectService';
 import { wsService } from '../services/websocketService';
 import { cacheGet, cacheSet } from '../utils/cache';
+import { getOptimizedImageUrl } from '../utils/imageUtils';
 import Loader from '../components/Loader';
 
 export const ConnectedProfiles = () => {
@@ -131,7 +132,13 @@ export const ConnectedProfiles = () => {
               <div className="flex items-center gap-3 truncate">
                 <div className="relative w-12 h-12 rounded-xl overflow-hidden bg-slate-800 border border-slate-700 shrink-0">
                   {item.profile.profile_picture ? (
-                    <img src={item.profile.profile_picture} alt="" className="w-full h-full object-cover" />
+                    <img
+                      src={getOptimizedImageUrl(item.profile.profile_picture, { width: 96, height: 96 })}
+                      alt=""
+                      className="w-full h-full object-cover"
+                      loading="lazy"
+                      decoding="async"
+                    />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center font-bold text-pink-400 bg-pink-500/10">
                       {item.profile.display_name?.charAt(0) || 'U'}

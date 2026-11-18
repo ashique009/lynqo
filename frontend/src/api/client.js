@@ -68,6 +68,29 @@ client.interceptors.response.use(
   }
 );
 
+// Wrap client.get with transparent in-flight request deduplication
+const rawGet = client.get.bind(client);
+const inFlightGetMap = new Map();
+
+client.get = function (url, config = {}) {
+  // If skipDeduplication is requested, pass directly to rawGet
+  if (config.skipDeduplication) {
+    return rawGet(url, config);
+  }
+
+  const cacheKey = `${url}::${JSON.stringify(config.params || {})}`;
+  if (inFlightGetMap.has(cacheKey)) {
+    return inFlightGetMap.get(cacheKey);
+  }
+
+  const promise = rawGet(url, config).finally(() => {
+    inFlightGetMap.delete(cacheKey);
+  });
+
+  inFlightGetMap.set(cacheKey, promise);
+  return promise;
+};
+
 export default client;
 export { API_BASE_URL, API_BASE_URL as API_URL };
 
