@@ -3,11 +3,22 @@ import json
 from PIL import Image
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, TransactionTestCase, Client
+from django.core.cache import cache
 from django.urls import reverse
 from accounts.models import (
     User, Profile, ProfileSession, ConnectRequest, Conversation, Message
 )
 from accounts.auth import SESSION_COOKIE_NAME
+
+
+class BaseTestCase(TestCase):
+    def setUp(self):
+        super().setUp()
+        cache.clear()
+
+    def tearDown(self):
+        cache.clear()
+        super().tearDown()
 
 
 def create_test_image(filename="avatar.png", size=(100, 100), color="blue", format="PNG"):
@@ -18,7 +29,7 @@ def create_test_image(filename="avatar.png", size=(100, 100), color="blue", form
     return SimpleUploadedFile(filename, file_obj.read(), content_type=f"image/{format.lower()}")
 
 
-class PasswordlessProfileTests(TestCase):
+class PasswordlessProfileTests(BaseTestCase):
     def setUp(self):
         self.client = Client()
 
@@ -56,6 +67,19 @@ class PasswordlessProfileTests(TestCase):
         self.assertEqual(response.status_code, 201)
         data = response.json()
         self.assertIsNotNone(data['profile']['profile_picture'])
+
+    def test_existing_profile_avatar_public_id_generates_image_url(self):
+        """Historical avatars stored as extensionless Cloudinary public_ids generate valid image URLs, never raw/upload."""
+        user = User.objects.create(username="LYNQ-IMG01", full_name="Image User")
+        profile = Profile.objects.create(user=user, profile_id="LYNQ-IMG01", display_name="Image User")
+        profile.profile_picture.name = "media/profile_pics/c3348121137e4705895fb20f42df0022_xxmc9u"
+        profile.save()
+
+        from accounts.serializers import ProfileDetailSerializer
+        serializer_data = ProfileDetailSerializer(profile).data
+        pic_url = serializer_data.get('profile_picture')
+        self.assertIsNotNone(pic_url)
+        self.assertNotIn('/raw/upload/', pic_url)
 
     def test_reject_invalid_image_upload(self):
         """Test rejection of non-image file spoofing an image extension."""
@@ -134,7 +158,7 @@ class PasswordlessProfileTests(TestCase):
         self.assertNotEqual(old_code, new_code)
 
 
-class ConnectionRequestTests(TestCase):
+class ConnectionRequestTests(BaseTestCase):
     def setUp(self):
         self.client = Client()
         # Create User A
@@ -247,7 +271,7 @@ class ConnectionRequestTests(TestCase):
         self.assertEqual(req.status, 'cancelled')
 
 
-class RealTimeMessagingTests(TestCase):
+class RealTimeMessagingTests(BaseTestCase):
     def setUp(self):
         self.client = Client()
         # Create Alice & Bob
@@ -472,7 +496,7 @@ class WebSocketMessagingTests(TransactionTestCase):
         await comm2.disconnect()
 
 
-class ChatReliabilityRegressionTests(TestCase):
+class ChatReliabilityRegressionTests(BaseTestCase):
     def setUp(self):
         self.client = Client()
         self.user1 = User.objects.create(username="LYNQ-REG01", full_name="User Reg 1")
@@ -582,7 +606,7 @@ class ChatReliabilityRegressionTests(TestCase):
         self.assertFalse(response.json()['success'])
 
 
-class VoiceMessagingTests(TestCase):
+class VoiceMessagingTests(BaseTestCase):
     def setUp(self):
         self.client = Client()
         self.user1 = User.objects.create(username="LYNQ-VOICE01", full_name="Voice User 1")
@@ -680,13 +704,55 @@ class VoiceMessagingTests(TestCase):
         self.assertIn("Unsupported", response.json()['message'])
 
     def test_adaptive_cloudinary_storage_routing(self):
-        """AdaptiveCloudinaryStorage routes audio to video and avatars to image."""
+        """AdaptiveCloudinaryStorage routes audio to video and avatars/public IDs to image."""
         from accounts.storage import AdaptiveCloudinaryStorage
+        from unittest.mock import patch
         storage = AdaptiveCloudinaryStorage()
+        # Audio extensions
         for ext in ['webm', 'mp3', 'mp4', 'ogg', 'wav', 'aac', 'm4a', 'opus', 'weba']:
             self.assertEqual(storage._get_resource_type(f"voice_file.{ext}"), 'video')
+        # Image extensions
         for ext in ['jpg', 'png', 'webp', 'gif']:
             self.assertEqual(storage._get_resource_type(f"avatar.{ext}"), 'image')
+        # Critical regression: extensionless Cloudinary public IDs (historical profile avatars) must be 'image'
+        self.assertEqual(storage._get_resource_type("profile_pics/c3348121137e4705895fb20f42df0022_xxmc9u"), 'image')
+        self.assertEqual(storage._get_resource_type("profile_pics/923f0c1a49ab490c97c75cd7e7a1e40c_b4lpvr"), 'image')
+
+        # Test upload options: images must have type='upload' (public), audio must have type='authenticated'
+        with patch('cloudinary.uploader.upload') as mock_cld_upload:
+            storage._upload("profile_pics/avatar.jpg", b"fake_jpg")
+            _, kwargs_img = mock_cld_upload.call_args
+            self.assertEqual(kwargs_img.get('resource_type'), 'image')
+            self.assertEqual(kwargs_img.get('type'), 'upload')
+
+            storage._upload("lynqo_voice/1/voice_test.webm", b"fake_audio")
+            _, kwargs_voice = mock_cld_upload.call_args
+            self.assertEqual(kwargs_voice.get('resource_type'), 'video')
+            self.assertEqual(kwargs_voice.get('type'), 'authenticated')
+
+    def test_profile_session_authentication_in_memory_caching(self):
+        """ProfileSessionAuthentication caches valid session tokens in memory to avoid repeated DB lookups."""
+        from accounts.auth import ProfileSessionAuthentication, invalidate_session_cache
+        from django.test import RequestFactory
+        factory = RequestFactory()
+        auth = ProfileSessionAuthentication()
+
+        req1 = factory.get('/api/auth/profile/me/', HTTP_AUTHORIZATION=f"Bearer {self.s1.token}")
+        user1, sess1 = auth.authenticate(req1)
+        self.assertEqual(user1.id, self.user1.id)
+
+        # Second request should resolve from cache with 0 queries
+        req2 = factory.get('/api/auth/profile/me/', HTTP_AUTHORIZATION=f"Bearer {self.s1.token}")
+        with self.assertNumQueries(0):
+            user2, sess2 = auth.authenticate(req2)
+            self.assertEqual(user2.id, self.user1.id)
+
+        # Invalidate cache
+        invalidate_session_cache(self.s1.token)
+        req3 = factory.get('/api/auth/profile/me/', HTTP_AUTHORIZATION=f"Bearer {self.s1.token}")
+        with self.assertNumQueries(1):
+            user3, sess3 = auth.authenticate(req3)
+            self.assertEqual(user3.id, self.user1.id)
 
     def test_voice_message_cloudinary_upload_uses_video_resource_type(self):
         """Voice upload with Cloudinary credentials passes resource_type='video' and authenticated type."""
@@ -791,7 +857,7 @@ class VoiceMessagingTests(TestCase):
         self.assertEqual(res_unauth.status_code, 403)
 
 
-class MessagePerformanceAndReliabilityTests(TestCase):
+class MessagePerformanceAndReliabilityTests(BaseTestCase):
     def setUp(self):
         self.client = Client()
         self.user1 = User.objects.create(username="LYNQ-PERF01", full_name="Perf User 1")
@@ -862,7 +928,7 @@ class MessagePerformanceAndReliabilityTests(TestCase):
         self.assertEqual(Message.objects.filter(client_message_id=client_msg_id).count(), 1)
 
 
-class DirectMessagingAndSearchTests(TestCase):
+class DirectMessagingAndSearchTests(BaseTestCase):
     def setUp(self):
         self.client = Client()
         # Create Alice

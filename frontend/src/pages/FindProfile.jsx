@@ -94,7 +94,14 @@ export const FindProfile = () => {
 
     // If conversation ID is already known
     if (targetProfile.conversation_id) {
-      navigate(`/chat/${targetProfile.conversation_id}`);
+      navigate(`/chat/${targetProfile.conversation_id}`, {
+        state: {
+          conversation: {
+            id: targetProfile.conversation_id,
+            other_participant: targetProfile,
+          },
+        },
+      });
       return;
     }
 
@@ -103,7 +110,11 @@ export const FindProfile = () => {
     try {
       const res = await chatService.startConversation(targetProfile.profile_id);
       if (res.success && res.conversation?.id) {
-        navigate(`/chat/${res.conversation.id}`);
+        navigate(`/chat/${res.conversation.id}`, {
+          state: {
+            conversation: res.conversation,
+          },
+        });
       } else {
         showToast(res.message || 'Failed to start conversation.', 'error');
       }

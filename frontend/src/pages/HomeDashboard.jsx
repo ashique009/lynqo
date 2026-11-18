@@ -37,6 +37,17 @@ export const HomeDashboard = () => {
           cacheSet('dashboard_conversations', merged, 120);
           return merged;
         });
+        // Background prefetch messages for the most recent conversation for instant tap-to-open
+        if (convList.length > 0) {
+          const topConvId = convList[0].id;
+          if (!cacheGet(`conv_msgs_${topConvId}`)) {
+            chatService.getMessages(topConvId, { limit: 50 }).then((msgRes) => {
+              if (msgRes.success) {
+                cacheSet(`conv_msgs_${topConvId}`, msgRes.messages || [], 60);
+              }
+            }).catch(() => {});
+          }
+        }
       }
     } catch (err) {
       console.error('Failed to load dashboard data:', err);

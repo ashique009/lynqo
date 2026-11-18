@@ -80,12 +80,20 @@ export const Chat = () => {
     let isCurrent = true;
     const currentId = conversationId;
 
-    // Immediately synchronize view with current conversation state/cache
-    const cachedConv = cacheGet(`conv_detail_${currentId}`);
+    // Immediately synchronize view with passed conversation state or cache
+    const passedConv = location.state?.conversation;
+    const cachedConv = passedConv || cacheGet(`conv_detail_${currentId}`);
     const cachedMsgs = cacheGet(`conv_msgs_${currentId}`);
-    setConversation(cachedConv || null);
-    setMessages(cachedMsgs || []);
-    setIsLoading(!cachedMsgs);
+    if (cachedConv) {
+      setConversation(cachedConv);
+      cacheSet(`conv_detail_${currentId}`, cachedConv, 120);
+    } else {
+      setConversation(null);
+    }
+
+    const initialMessages = cachedMsgs || (passedConv?.last_message ? [passedConv.last_message] : []);
+    setMessages(initialMessages);
+    setIsLoading(!cachedMsgs && !passedConv?.last_message);
     setOtherUserTyping(false);
     setInputText('');
 

@@ -125,6 +125,17 @@ else:
         }
     }
 
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'lynqo-local-cache',
+        'TIMEOUT': 300,
+        'OPTIONS': {
+            'MAX_ENTRIES': 2000,
+        }
+    }
+}
+
 # Channels & Redis Layer
 REDIS_URL = os.getenv('REDIS_URL')
 if REDIS_URL:

@@ -16,7 +16,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 logger = logging.getLogger(__name__)
 
-from .auth import SESSION_COOKIE_NAME
+from .auth import SESSION_COOKIE_NAME, invalidate_session_cache
 from .models import (
     User, Profile, ProfileSession, ConnectRequest, Conversation, Message
 )
@@ -209,6 +209,8 @@ class ProfileUpdateView(APIView):
             profile.profile_picture = serializer.validated_data['profile_picture']
 
         profile.save()
+        if hasattr(request, 'profile_session') and request.profile_session:
+            invalidate_session_cache(request.profile_session.token)
 
         return Response({
             'success': True,
@@ -247,6 +249,7 @@ class ProfileLogoutView(APIView):
         if hasattr(request, 'profile_session') and request.profile_session:
             request.profile_session.is_active = False
             request.profile_session.save(update_fields=['is_active'])
+            invalidate_session_cache(request.profile_session.token)
 
         response = Response({'success': True, 'message': 'Logged out successfully.'})
         clear_session_cookie(response)
