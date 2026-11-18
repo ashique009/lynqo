@@ -460,6 +460,34 @@ export const Chat = () => {
       return updated;
     });
 
+    if (failedMsg.message_type === 'voice') {
+      try {
+        if (failedMsg.audio_url && failedMsg.audio_url.startsWith('blob:')) {
+          const resp = await fetch(failedMsg.audio_url);
+          const blob = await resp.blob();
+          const res = await chatService.sendVoiceMessage(currentId, blob, failedMsg.duration_seconds, failedMsg.client_message_id);
+          if (res.success && activeConvIdRef.current === currentId) {
+            setMessages((prev) => {
+              const merged = mergeMessages(prev, [res.message]);
+              cacheSet(`conv_msgs_${currentId}`, merged, 60);
+              return merged;
+            });
+            return;
+          }
+        }
+      } catch (err) {
+        setMessages((prev) => {
+          const updated = prev.map((m) =>
+            m.client_message_id === failedMsg.client_message_id ? { ...m, status: 'failed' } : m
+          );
+          cacheSet(`conv_msgs_${currentId}`, updated, 60);
+          return updated;
+        });
+        showToast('Voice retry failed. Please record again.', 'error');
+        return;
+      }
+    }
+
     const sentWs = wsService.sendMessage(currentId, failedMsg.content, failedMsg.client_message_id);
     if (!sentWs) {
       try {
@@ -508,7 +536,7 @@ export const Chat = () => {
       cacheSet(`conv_msgs_${currentId}`, updated, 60);
       return updated;
     });
-    setTimeout(scrollToBottom, 50);
+    setTimeout(() => scrollToBottom('smooth'), 50);
 
     try {
       const res = await chatService.sendVoiceMessage(currentId, audioBlob, durationSec, clientMsgId);
@@ -520,7 +548,14 @@ export const Chat = () => {
         });
       }
     } catch (err) {
-      showToast(err.message || 'Failed to upload voice message.', 'error');
+      setMessages((prev) => {
+        const updated = prev.map((m) =>
+          m.client_message_id === clientMsgId ? { ...m, status: 'failed' } : m
+        );
+        cacheSet(`conv_msgs_${currentId}`, updated, 60);
+        return updated;
+      });
+      showToast(err.message || 'Failed to upload voice message. Tap Retry.', 'error');
     }
   };
 
@@ -532,8 +567,11 @@ export const Chat = () => {
     audioLevels,
     isCanceling,
     isNearLock,
+    previewUrl,
+    isPlayingPreview,
     pauseRecording,
     resumeRecording,
+    togglePreview,
     stopAndSend,
     cancelRecording,
     handlePointerDown,
@@ -728,7 +766,7 @@ export const Chat = () => {
               <button
                 type="button"
                 onClick={cancelRecording}
-                className="p-2.5 sm:p-3 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
+                className="p-2.5 sm:p-3 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0"
                 title="Discard recording"
                 aria-label="Discard recording"
               >
@@ -739,7 +777,7 @@ export const Chat = () => {
               <div className="flex items-center gap-1.5 sm:gap-3">
                 <div className="flex items-center gap-1.5">
                   <span className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ${isPaused ? 'bg-amber-400' : 'bg-rose-500 animate-pulse motion-reduce:animate-none'}`} />
-                  <span className="font-mono text-xs sm:text-sm font-bold text-white">
+                  <span className="font-mono text-xs sm:text-sm font-bold text-white min-w-[32px] sm:min-w-[38px]">
                     {formatRecordingTime(recordDuration)}
                   </span>
                 </div>
@@ -757,22 +795,36 @@ export const Chat = () => {
                 </div>
               </div>
 
-              {/* Right: Pause/Resume + Send */}
+              {/* Right: Preview / Resume / Pause + Send */}
               <div className="flex items-center gap-1.5 sm:gap-2">
+                {isPaused && (
+                  <button
+                    type="button"
+                    onClick={togglePreview}
+                    className={`p-2.5 sm:p-3 rounded-xl transition-colors cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center ${
+                      isPlayingPreview ? 'bg-pink-500/20 text-pink-400 border border-pink-500/30' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                    }`}
+                    title={isPlayingPreview ? 'Pause preview' : 'Listen to recording'}
+                    aria-label={isPlayingPreview ? 'Pause preview' : 'Listen to recording'}
+                  >
+                    {isPlayingPreview ? <Pause className="w-4 sm:w-5 h-4 sm:h-5 fill-current" /> : <Play className="w-4 sm:w-5 h-4 sm:h-5 fill-current" />}
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={isPaused ? resumeRecording : pauseRecording}
-                  className="p-2.5 sm:p-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer"
+                  className="p-2.5 sm:p-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center"
                   title={isPaused ? 'Resume recording' : 'Pause recording'}
                   aria-label={isPaused ? 'Resume recording' : 'Pause recording'}
                 >
-                  {isPaused ? <Play className="w-4 sm:w-5 h-4 sm:h-5 fill-current" /> : <Pause className="w-4 sm:w-5 h-4 sm:h-5 fill-current" />}
+                  {isPaused ? <Mic className="w-4 sm:w-5 h-4 sm:h-5 text-pink-400" /> : <Pause className="w-4 sm:w-5 h-4 sm:h-5 fill-current" />}
                 </button>
 
                 <button
                   type="button"
                   onClick={stopAndSend}
-                  className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer"
+                  className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 active:scale-95 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0"
                   title="Send voice message"
                   aria-label="Send voice message"
                 >
@@ -811,14 +863,28 @@ export const Chat = () => {
                 <span>{isCanceling ? 'Release to cancel' : '< Slide to cancel'}</span>
               </div>
 
-              {/* Active Held Mic Indicator */}
-              <div
-                onPointerMove={handlePointerMove}
-                onPointerUp={handlePointerUp}
-                onPointerCancel={handlePointerCancel}
-                className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-600 text-white shadow-lg shadow-rose-500/30 scale-110 animate-pulse motion-reduce:animate-none cursor-pointer shrink-0"
-              >
-                <Mic className="w-5 h-5" />
+              {/* Active Mic + Direct Send Button */}
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <div
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                  onPointerCancel={handlePointerCancel}
+                  onClick={stopAndSend}
+                  className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-600 text-white shadow-lg shadow-rose-500/30 scale-105 animate-pulse motion-reduce:animate-none cursor-pointer shrink-0 min-w-[44px] min-h-[44px] flex items-center justify-center"
+                  title="Release or tap to send"
+                >
+                  <Mic className="w-5 h-5" />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={stopAndSend}
+                  className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0"
+                  title="Send voice message"
+                  aria-label="Send voice message"
+                >
+                  <Send className="w-4 sm:w-5 h-4 sm:h-5" />
+                </button>
               </div>
             </div>
           )}
@@ -840,7 +906,7 @@ export const Chat = () => {
           {inputText.trim() ? (
             <button
               type="submit"
-              className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer shrink-0"
+              className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer shrink-0 min-w-[44px] min-h-[44px] flex items-center justify-center"
               title="Send message"
               aria-label="Send message"
             >
@@ -850,12 +916,9 @@ export const Chat = () => {
             <button
               type="button"
               onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              onPointerCancel={handlePointerCancel}
-              className="p-2.5 sm:p-3 rounded-2xl bg-slate-800 hover:bg-slate-700 active:bg-pink-600 text-slate-300 hover:text-white transition-all cursor-pointer shrink-0 touch-none select-none"
-              title="Hold to record, release to send"
-              aria-label="Hold to record voice message, release to send"
+              className="p-2.5 sm:p-3 rounded-2xl bg-slate-800 hover:bg-slate-700 active:bg-pink-600 text-slate-300 hover:text-white transition-all cursor-pointer shrink-0 touch-none select-none min-w-[44px] min-h-[44px] flex items-center justify-center"
+              title="Tap to record hands-free, hold to speak"
+              aria-label="Record voice message"
             >
               <Mic className="w-4 sm:w-5 h-4 sm:h-5" />
             </button>

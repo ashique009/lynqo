@@ -132,3 +132,69 @@ test('4. Voice message status updates (sent -> delivered -> seen) preserve voice
   assert.equal(merged[0].duration_seconds, 12);
   assert.equal(merged[0].audio_format, 'webm');
 });
+
+test('5. getSupportedMimeType detects supported audio codecs accurately', async () => {
+  const { getSupportedMimeType } = await import('../hooks/useVoiceRecorder.js');
+
+  // When MediaRecorder is undefined (node environment fallback)
+  const defaultMime = getSupportedMimeType();
+  assert.equal(typeof defaultMime, 'string');
+  assert.ok(defaultMime.length > 0);
+
+  // When MediaRecorder.isTypeSupported is provided (mocked browser environment)
+  globalThis.MediaRecorder = {
+    isTypeSupported: (type) => type.includes('mp4') || type.includes('webm'),
+  };
+
+  const detected = getSupportedMimeType();
+  assert.ok(detected.includes('webm') || detected.includes('mp4'));
+  delete globalThis.MediaRecorder;
+});
+
+test('6. Voice message failure preserves client_message_id for idempotent retry', () => {
+  const clientMsgId = 'voice-retry-test-456';
+  const initialMessages = [
+    {
+      id: 'temp-voice-retry',
+      client_message_id: clientMsgId,
+      message_type: 'voice',
+      audio_url: 'blob:http://localhost:5173/retry-blob',
+      duration_seconds: 4,
+      status: 'sending',
+      created_at: '2026-11-18T10:05:00Z',
+    },
+  ];
+
+  // Simulating network failure: status transition to 'failed'
+  const failedMessages = initialMessages.map((m) =>
+    m.client_message_id === clientMsgId ? { ...m, status: 'failed' } : m
+  );
+  assert.equal(failedMessages[0].status, 'failed');
+  assert.equal(failedMessages[0].client_message_id, clientMsgId);
+
+  // User hits retry: message returns to 'sending' with IDENTICAL client_message_id
+  const retryingMessages = failedMessages.map((m) =>
+    m.client_message_id === clientMsgId ? { ...m, status: 'sending' } : m
+  );
+  assert.equal(retryingMessages[0].status, 'sending');
+  assert.equal(retryingMessages[0].client_message_id, clientMsgId);
+
+  // Server succeeds and returns persisted message
+  const serverMsg = [
+    {
+      id: 555,
+      client_message_id: clientMsgId,
+      message_type: 'voice',
+      audio_url: '/api/auth/conversations/10/messages/555/audio/',
+      duration_seconds: 4,
+      status: 'sent',
+      created_at: '2026-11-18T10:05:01Z',
+    },
+  ];
+
+  const merged = mergeMessages(retryingMessages, serverMsg);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, 555);
+  assert.equal(merged[0].client_message_id, clientMsgId);
+  assert.equal(merged[0].status, 'sent');
+});
