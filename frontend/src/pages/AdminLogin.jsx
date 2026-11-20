@@ -34,12 +34,12 @@ export default function AdminLogin() {
       {/* Background ambient glows */}
       <div className="absolute top-[-10%] left-[-10%] w-[60vw] h-[60vw] rounded-full bg-brand-purple/10 blur-[150px] pointer-events-none z-0" />
       <div className="absolute bottom-[-10%] right-[-10%] w-[60vw] h-[60vw] rounded-full bg-indigo-500/10 blur-[150px] pointer-events-none z-0" />
-      
+
       {/* Grid Pattern overlay */}
       <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.015)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.015)_1px,transparent_1px)] bg-[size:40px_40px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_50%,#000_80%,transparent_100%)] pointer-events-none z-0" />
 
       {/* Main card */}
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, y: 30 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
@@ -50,7 +50,7 @@ export default function AdminLogin() {
           <div className="w-12 h-12 rounded-xl bg-brand-purple/10 border border-brand-purple/35 flex items-center justify-center mb-4 shadow-[0_0_15px_rgba(124,58,237,0.25)]">
             <Lock className="w-5 h-5 text-brand-purple-light animate-pulse" />
           </div>
-          
+
           <h1 className="text-3xl font-extrabold tracking-tight bg-gradient-to-r from-purple-400 via-fuchsia-500 to-indigo-400 bg-clip-text text-transparent font-display">
             Lynqo
           </h1>
@@ -64,7 +64,7 @@ export default function AdminLogin() {
         <form onSubmit={handleSubmit} className="space-y-6">
           <AnimatePresence mode="wait">
             {error && (
-              <motion.div 
+              <motion.div
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: 'auto' }}
                 exit={{ opacity: 0, height: 0 }}
@@ -100,7 +100,8 @@ export default function AdminLogin() {
               />
               <button
                 type="button"
-                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 cursor-pointer transition-colors"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                className="absolute right-0 top-0 bottom-0 px-3.5 flex items-center justify-center text-slate-400 hover:text-slate-200 cursor-pointer transition-colors"
                 onClick={() => setShowPassword(!showPassword)}
               >
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -108,7 +109,7 @@ export default function AdminLogin() {
             </div>
           </div>
 
-          <motion.button 
+          <motion.button
             whileHover={{ scale: 1.01 }}
             whileTap={{ scale: 0.99 }}
             type="submit"
@@ -131,4 +132,4 @@ export default function AdminLogin() {
       </motion.div>
     </div>
   );
-}
+}

@@ -1,0 +1,82 @@
+version: '3.8'
+
+# ============================================================================
+# LYNQO Production Stack for Coolify VPS
+# Services:
+# - web: Django + Daphne ASGI (REST API, WebSockets WSS, Frontend SPA)
+# - db: PostgreSQL 16
+# - redis: Redis 7 (Channels Layer & Cache)
+# ============================================================================
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - SECRET_KEY=${SECRET_KEY}
+      - DEBUG=False
+      - DATABASE_URL=postgres://${POSTGRES_USER:-lynqo}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-lynqo_db}
+      - REDIS_URL=redis://redis:6379/0
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-*}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-https://lynqoweb.website}
+      - CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS:-https://lynqoweb.website}
+      - FRONTEND_URL=${FRONTEND_URL:-https://lynqoweb.website}
+      - MEDIA_ROOT=/app/media
+      - CLOUDINARY_CLOUD_NAME=${CLOUDINARY_CLOUD_NAME:-}
+      - CLOUDINARY_API_KEY=${CLOUDINARY_API_KEY:-}
+      - CLOUDINARY_API_SECRET=${CLOUDINARY_API_SECRET:-}
+      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}
+      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:-}
+      - VAPID_ADMIN_EMAIL=${VAPID_ADMIN_EMAIL:-mailto:admin@lynqoweb.website}
+    volumes:
+      - media_data:/app/media
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-lynqo_db}
+      POSTGRES_USER: ${POSTGRES_USER:-lynqo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lynqo} -d ${POSTGRES_DB:-lynqo_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  media_data:
+    name: lynqo_media_data
+  postgres_data:
+    name: lynqo_postgres_data
+  redis_data:
+    name: lynqo_redis_data

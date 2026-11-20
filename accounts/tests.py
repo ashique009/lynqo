@@ -1229,7 +1229,309 @@ class MessageEditDeleteTests(BaseTestCase):
         self.assertFalse(msg.is_deleted)
 
 
+class SimpleLoginAndMultiDeviceTests(BaseTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client = Client()
+        # Create user Alice with password
+        res = self.client.post('/api/auth/profile/create/', {
+            'username': 'AliceTester',
+            'display_name': 'Alice Wonder',
+            'password': 'pass',  # 4 characters allowed
+        })
+        self.assertEqual(res.status_code, 201)
+        data = res.json()
+        self.token = data['token']
+        self.recovery_code = data['recovery_code']
+        self.profile_id = data['profile']['profile_id']
+
+    def test_login_valid_credentials(self):
+        """User can log in with exact username and password."""
+        client = Client()
+        res = client.post('/api/auth/login/', {
+            'username': 'AliceTester',
+            'password': 'pass',
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertTrue(data['success'])
+        self.assertEqual(data['profile']['profile_id'], self.profile_id)
+        self.assertIn(SESSION_COOKIE_NAME, client.cookies)
+
+    def test_login_case_insensitive_username(self):
+        """Username matching is case-insensitive."""
+        client = Client()
+        res = client.post('/api/auth/login/', {
+            'username': 'alicetester',
+            'password': 'pass',
+        })
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.json()['success'])
+
+    def test_login_via_profile_id(self):
+        """Existing users can log in using their Profile ID as username."""
+        client = Client()
+        res = client.post('/api/auth/login/', {
+            'username': self.profile_id.lower(),
+            'password': 'pass',
+        })
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.json()['success'])
+
+    def test_argon2_hashing_verified(self):
+        """Verify user's password was hashed using Argon2."""
+        user = User.objects.get(username='AliceTester')
+        self.assertTrue(user.password.startswith('argon2'))
+
+    def test_login_invalid_password_generic_error(self):
+        """Invalid password returns generic 401 error message."""
+        client = Client()
+        res = client.post('/api/auth/login/', {
+            'username': 'AliceTester',
+            'password': 'wrongpassword',
+        })
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()['message'], 'Invalid username or password.')
+
+    def test_login_nonexistent_user_generic_error(self):
+        """Non-existent username returns generic 401 error message (prevents enumeration)."""
+        client = Client()
+        res = client.post('/api/auth/login/', {
+            'username': 'NonExistentUser123',
+            'password': 'anyPassword',
+        })
+        self.assertEqual(res.status_code, 401)
+        self.assertEqual(res.json()['message'], 'Invalid username or password.')
+
+    def test_login_rate_limiting_lockout(self):
+        """5 failed login attempts triggers 429 lockout."""
+        client = Client()
+        for _ in range(5):
+            res = client.post('/api/auth/login/', {
+                'username': 'AliceTester',
+                'password': 'badpassword',
+            })
+            self.assertEqual(res.status_code, 401)
+
+        # 6th attempt must be 429
+        res6 = client.post('/api/auth/login/', {
+            'username': 'AliceTester',
+            'password': 'pass',
+        })
+        self.assertEqual(res6.status_code, 429)
+        self.assertIn('Too many failed login attempts', res6.json()['message'])
+
+    def test_multi_device_login_and_independent_logout(self):
+        """Logging in on device 2 creates an independent session; device 1 remains logged in."""
+        device1 = Client()
+        res1 = device1.post('/api/auth/login/', {'username': 'AliceTester', 'password': 'pass'})
+        token1 = res1.json()['token']
+
+        device2 = Client()
+        res2 = device2.post('/api/auth/login/', {'username': 'AliceTester', 'password': 'pass'})
+        token2 = res2.json()['token']
+
+        self.assertNotEqual(token1, token2)
+
+        # Device 1 logs out
+        logout_res = device1.post('/api/auth/profile/logout/', HTTP_AUTHORIZATION=f"Bearer {token1}")
+        self.assertEqual(logout_res.status_code, 200)
+
+        # Device 1 session is inactive
+        res_me1 = device1.get('/api/auth/profile/me/', HTTP_AUTHORIZATION=f"Bearer {token1}")
+        self.assertIn(res_me1.status_code, (401, 403))
+
+        # Device 2 session is STILL ACTIVE!
+        res_me2 = device2.get('/api/auth/profile/me/', HTTP_AUTHORIZATION=f"Bearer {token2}")
+        self.assertEqual(res_me2.status_code, 200)
+        self.assertEqual(res_me2.json()['profile']['profile_id'], self.profile_id)
+
+    def test_logout_all_devices(self):
+        """Log out from all devices revokes all active sessions."""
+        d1 = Client()
+        r1 = d1.post('/api/auth/login/', {'username': 'AliceTester', 'password': 'pass'})
+        t1 = r1.json()['token']
+
+        d2 = Client()
+        r2 = d2.post('/api/auth/login/', {'username': 'AliceTester', 'password': 'pass'})
+        t2 = r2.json()['token']
+
+        # d1 invokes logout-all
+        res = d1.post('/api/auth/profile/logout-all/', HTTP_AUTHORIZATION=f"Bearer {t1}")
+        self.assertEqual(res.status_code, 200)
+
+        # Both sessions are now revoked
+        self.assertIn(d1.get('/api/auth/profile/me/', HTTP_AUTHORIZATION=f"Bearer {t1}").status_code, (401, 403))
+        self.assertIn(d2.get('/api/auth/profile/me/', HTTP_AUTHORIZATION=f"Bearer {t2}").status_code, (401, 403))
 
 
+class AccountRecoveryExtendedTests(BaseTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client = Client()
+        res = self.client.post('/api/auth/profile/create/', {
+            'username': 'BobRecover',
+            'display_name': 'Bob Tester',
+            'password': 'initialpass',
+        })
+        data = res.json()
+        self.recovery_code = data['recovery_code']
+        self.token = data['token']
+
+    def test_recovery_flow_sets_new_password_and_revokes_old_sessions(self):
+        """Entering username + recovery code sets new password, rotates code, and revokes old sessions."""
+        client = Client()
+        res = client.post('/api/auth/profile/recover/', {
+            'username': 'bobrecover',
+            'recovery_code': self.recovery_code,
+            'new_password': 'brandnewpassword',
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertTrue(data['success'])
+        new_code = data['new_recovery_code']
+        self.assertNotEqual(new_code, self.recovery_code)
+
+        # Old session is revoked
+        old_check = self.client.get('/api/auth/profile/me/', HTTP_AUTHORIZATION=f"Bearer {self.token}")
+        self.assertIn(old_check.status_code, (401, 403))
+
+        # Can log in with brand new password
+        login_res = client.post('/api/auth/login/', {
+            'username': 'BobRecover',
+            'password': 'brandnewpassword',
+        })
+        self.assertEqual(login_res.status_code, 200)
+
+        # Old recovery code CANNOT be reused!
+        reuse_res = client.post('/api/auth/profile/recover/', {
+            'username': 'BobRecover',
+            'recovery_code': self.recovery_code,
+            'new_password': 'anotherpassword',
+        })
+        self.assertEqual(reuse_res.status_code, 400)
 
 
+class ImageMessageTests(BaseTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client = Client()
+        res_a = self.client.post('/api/auth/profile/create/', {'display_name': 'AliceImg'})
+        self.token_a = res_a.json()['token']
+        self.user_a = User.objects.get(username=res_a.json()['profile']['profile_id'])
+
+        res_b = self.client.post('/api/auth/profile/create/', {'display_name': 'BobImg'})
+        self.token_b = res_b.json()['token']
+        self.user_b = User.objects.get(username=res_b.json()['profile']['profile_id'])
+
+        res_c = self.client.post('/api/auth/profile/create/', {'display_name': 'CharlieEve'})
+        self.token_c = res_c.json()['token']
+
+        self.conv, _ = Conversation.get_or_create_between(self.user_a, self.user_b)
+
+    def test_upload_image_message_success_and_metadata(self):
+        """Uploading valid image produces thumbnail, dimensions, and image message."""
+        test_img = create_test_image("photo.png", size=(400, 300), color="purple", format="PNG")
+        res = self.client.post(
+            f"/api/auth/conversations/{self.conv.id}/messages/image/",
+            {'image': test_img, 'client_message_id': 'img-test-123'},
+            HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+        )
+        self.assertEqual(res.status_code, 201)
+        data = res.json()
+        self.assertTrue(data['success'])
+        msg = data['message']
+        self.assertEqual(msg['message_type'], 'image')
+        self.assertEqual(msg['image_width'], 400)
+        self.assertEqual(msg['image_height'], 300)
+        self.assertIsNotNone(msg['image_url'])
+        self.assertIsNotNone(msg['thumbnail_url'])
+
+        # Bob can view the image
+        res_bob_img = self.client.get(
+            msg['image_url'],
+            HTTP_AUTHORIZATION=f"Bearer {self.token_b}"
+        )
+        self.assertIn(res_bob_img.status_code, (200, 302))
+
+        # Bob can view the thumbnail
+        res_bob_thumb = self.client.get(
+            msg['thumbnail_url'],
+            HTTP_AUTHORIZATION=f"Bearer {self.token_b}"
+        )
+        self.assertIn(res_bob_thumb.status_code, (200, 302))
+
+    def test_unauthorized_user_cannot_access_private_image(self):
+        """Third party user C cannot upload or view images in A & B conversation."""
+        test_img = create_test_image("hacker.png", size=(100, 100))
+        # C tries to upload to A & B conversation
+        res_up = self.client.post(
+            f"/api/auth/conversations/{self.conv.id}/messages/image/",
+            {'image': test_img},
+            HTTP_AUTHORIZATION=f"Bearer {self.token_c}"
+        )
+        self.assertEqual(res_up.status_code, 403)
+
+        # A uploads
+        test_img2 = create_test_image("alice.png", size=(200, 200))
+        res_a = self.client.post(
+            f"/api/auth/conversations/{self.conv.id}/messages/image/",
+            {'image': test_img2},
+            HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+        )
+        msg_id = res_a.json()['message']['id']
+
+        # C tries to view the image
+        res_view = self.client.get(
+            f"/api/auth/conversations/{self.conv.id}/messages/{msg_id}/image/",
+            HTTP_AUTHORIZATION=f"Bearer {self.token_c}"
+        )
+        self.assertEqual(res_view.status_code, 403)
+
+
+class RealtimeMessagingAndPresenceTests(TestCase):
+    def test_presence_tracking_multi_session(self):
+        """Active connection counter preserves online status until all sessions close."""
+        from accounts.consumers import is_user_online, add_user_channel, remove_user_channel
+        user = User.objects.create(username="ws_user_presence_test")
+        self.assertFalse(is_user_online(user.id))
+
+        c1 = add_user_channel(user.id, "chan_1")
+        self.assertEqual(c1, 1)
+        self.assertTrue(is_user_online(user.id))
+
+        # Second tab opens
+        c2 = add_user_channel(user.id, "chan_2")
+        self.assertEqual(c2, 2)
+        self.assertTrue(is_user_online(user.id))
+
+        # First tab closes - user must still be online!
+        c3 = remove_user_channel(user.id, "chan_1")
+        self.assertEqual(c3, 1)
+        self.assertTrue(is_user_online(user.id))
+
+        # Second tab closes - user becomes offline
+        c4 = remove_user_channel(user.id, "chan_2")
+        self.assertEqual(c4, 0)
+        self.assertFalse(is_user_online(user.id))
+
+    def test_profile_serializer_presence_reflects_active_ws(self):
+        """ProfilePublicSerializer returns is_online=True when user has active WS."""
+        from accounts.consumers import add_user_channel, remove_user_channel
+        from accounts.serializers import ProfilePublicSerializer
+        user = User.objects.create(username="ws_serializer_test")
+        profile = Profile.objects.create(user=user, profile_id="LYNQ-SER1", display_name="Ser User")
+
+        # Initially offline
+        ser1 = ProfilePublicSerializer(profile).data
+        self.assertFalse(ser1['is_online'])
+
+        # User connects
+        add_user_channel(user.id, "chan_ser_1")
+        ser2 = ProfilePublicSerializer(profile).data
+        self.assertTrue(ser2['is_online'])
+
+        # User disconnects
+        remove_user_channel(user.id, "chan_ser_1")
+        ser3 = ProfilePublicSerializer(profile).data
+        self.assertFalse(ser3['is_online'])

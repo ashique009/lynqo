@@ -16,6 +16,7 @@ import PublicRoute from "./components/PublicRoute";
 import Loader from "./components/Loader";
 
 // Lazy-loaded Pages for Route-Level Code Splitting
+const Login = lazy(() => import("./pages/Login"));
 const Landing = lazy(() => import("./pages/Landing"));
 const ProfileRecovery = lazy(() => import("./pages/ProfileRecovery"));
 const HomeDashboard = lazy(() => import("./pages/HomeDashboard"));
@@ -46,6 +47,22 @@ function App() {
                 {/* Public Routes (Guests only; redirects logged-in sessions to /dashboard) */}
                 <Route
                   path="/"
+                  element={
+                    <PublicRoute>
+                      <Login />
+                    </PublicRoute>
+                  }
+                />
+                <Route
+                  path="/login"
+                  element={
+                    <PublicRoute>
+                      <Login />
+                    </PublicRoute>
+                  }
+                />
+                <Route
+                  path="/landing"
                   element={
                     <PublicRoute>
                       <Landing />

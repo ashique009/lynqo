@@ -6,7 +6,30 @@ from django.views.static import serve
 from django.http import JsonResponse, FileResponse
 
 def health_check(request):
-    return JsonResponse({'status': 'ok', 'app': 'LYNQO', 'service': 'healthy'})
+    db_ok = True
+    try:
+        from django.db import connection
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+    except Exception:
+        db_ok = False
+
+    redis_ok = True
+    try:
+        from django.core.cache import cache
+        cache.set('health_test', 1, 5)
+        redis_ok = cache.get('health_test') == 1
+    except Exception:
+        redis_ok = False
+
+    overall = db_ok
+    status_code = 200 if overall else 503
+    return JsonResponse({
+        'status': 'ok' if overall else 'degraded',
+        'app': 'LYNQO',
+        'database': 'connected' if db_ok else 'error',
+        'cache': 'connected' if redis_ok else 'degraded',
+    }, status=status_code)
 
 def serve_spa(request):
     index_path = settings.BASE_DIR / 'frontend' / 'dist' / 'index.html'
@@ -17,8 +40,9 @@ def serve_spa(request):
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('health/', health_check),
+    path('api/health/', health_check),
     path('api/auth/', include('accounts.urls')),
-    re_path(r'^media/(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT}),
+    # Private media must be accessed through authenticated message endpoints.
     re_path(r'^assets/(?P<path>.*)$', serve, {'document_root': settings.BASE_DIR / 'frontend' / 'dist' / 'assets'}),
     re_path(r'^(?!api|admin|media|static|ws|health).*$', serve_spa),
 ]

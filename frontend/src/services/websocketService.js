@@ -9,6 +9,7 @@ class WebSocketService {
     this.currentConvId = null;
     this.currentToken = null;
     this.isConnected = false;
+    this.messageQueue = [];
   }
 
   getWsUrl(token) {
@@ -33,8 +34,8 @@ class WebSocketService {
 
     // 3. Fallback for local development or same-host deployments
     const host = window.location.hostname || '127.0.0.1';
-    const isDev = host === 'localhost' || host === '127.0.0.1';
-    const port = isDev ? ':8000' : (window.location.port ? `:${window.location.port}` : '');
+    const isViteDev = typeof window !== 'undefined' && window.location.port === '5173';
+    const port = isViteDev ? ':8001' : (window.location.port ? `:${window.location.port}` : '');
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     return `${protocol}//${host}${port}/ws/chat/?token=${encodedToken}`;
   }
@@ -78,6 +79,16 @@ class WebSocketService {
 
       // Start ping heartbeat every 30s
       this.startHeartbeat();
+
+      // Flush any messages queued while CONNECTING
+      while (this.messageQueue.length > 0) {
+        const item = this.messageQueue.shift();
+        try {
+          this.ws.send(JSON.stringify(item));
+        } catch (e) {
+          console.error('Error sending queued message:', e);
+        }
+      }
 
       // Re-join current conversation if any
       if (this.currentConvId) {
@@ -146,6 +157,10 @@ class WebSocketService {
       this.ws.send(JSON.stringify(data));
       return true;
     }
+    if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+      this.messageQueue.push(data);
+      return true;
+    }
     return false;
   }
 
@@ -161,13 +176,17 @@ class WebSocketService {
     this.send({ type: 'leave_conversation', conversation_id: convId });
   }
 
-  sendMessage(convId, content, clientMessageId) {
-    return this.send({
+  sendMessage(convId, content, clientMessageId, replyToId = null) {
+    const payload = {
       type: 'chat_message',
       conversation_id: convId,
       content,
       client_message_id: clientMessageId,
-    });
+    };
+    if (replyToId) {
+      payload.reply_to_id = replyToId;
+    }
+    return this.send(payload);
   }
 
   sendTyping(convId, isTyping) {

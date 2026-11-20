@@ -3,7 +3,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   ArrowLeft, Send, Check, CheckCheck, Clock,
   ChevronDown, WifiOff, AlertCircle, Mic, Lock, Trash2, Pause, Play, RefreshCw,
-  MoreVertical, Copy, Edit2, Ban, X
+  MoreVertical, Copy, Edit2, Ban, X, Image as ImageIcon, Camera, Reply, CornerUpLeft
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -13,6 +13,10 @@ import { cacheGet, cacheSet } from '../utils/cache';
 import { mergeMessages } from '../utils/messageUtils';
 import { audioPlayerManager } from '../utils/audioPlayerManager';
 import VoiceMessage from '../components/VoiceMessage';
+import ChatImageMessage from '../components/ChatImageMessage';
+import ImageViewerModal from '../components/ImageViewerModal';
+import CameraCaptureModal from '../components/CameraCaptureModal';
+import { SwipeableMessageItem } from '../components/SwipeableMessageItem';
 import useVoiceRecorder from '../hooks/useVoiceRecorder';
 import Loader from '../components/Loader';
 import Modal from '../components/Modal';
@@ -78,6 +82,8 @@ export const Chat = () => {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deletingMessage, setDeletingMessage] = useState(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [replyingTo, setReplyingTo] = useState(null);
+  const messageInputRef = useRef(null);
   const longPressTimerRef = useRef(null);
   const touchStartPosRef = useRef({ x: 0, y: 0 });
 
@@ -110,6 +116,7 @@ export const Chat = () => {
     setIsLoading(!cachedMsgs && !passedConv?.last_message);
     setOtherUserTyping(false);
     setInputText('');
+    setReplyingTo(null);
 
     // Join conversation room via WebSocket
     wsService.joinConversation(currentId);
@@ -206,6 +213,29 @@ export const Chat = () => {
         }
 
         // Auto-scroll if user is near bottom
+        if (isNearBottomRef.current) {
+          setTimeout(scrollToBottom, 50);
+        } else {
+          setShowScrollBottom(true);
+        }
+      }
+    });
+
+    // Listen for conversation updates (backup / push channel)
+    const unsubConvUpdate = wsService.on('conversation_update', (data) => {
+      const incomingMsg = data.message;
+      if (incomingMsg && String(data.conversation_id) === String(activeConvIdRef.current)) {
+        setMessages((prev) => {
+          const merged = mergeMessages(prev, [incomingMsg]);
+          cacheSet(`conv_msgs_${activeConvIdRef.current}`, merged, 60);
+          return merged;
+        });
+
+        if (incomingMsg.sender_profile_id !== profile?.profile_id) {
+          wsService.markDelivered(activeConvIdRef.current, [incomingMsg.id]);
+          wsService.markSeen(activeConvIdRef.current);
+        }
+
         if (isNearBottomRef.current) {
           setTimeout(scrollToBottom, 50);
         } else {
@@ -344,6 +374,7 @@ export const Chat = () => {
       wsService.leaveConversation(currentId);
       unsubStatus();
       unsubMsg();
+      unsubConvUpdate();
       unsubAck();
       unsubDelivered();
       unsubTyping();
@@ -465,6 +496,65 @@ export const Chat = () => {
       x: Math.max(10, Math.min(rect.left - 50, window.innerWidth - 160)),
       y: Math.max(10, Math.min(rect.bottom + 4, window.innerHeight - 200)),
     });
+  };
+
+  const handleStartReply = (msg) => {
+    if (!msg || msg.is_deleted) return;
+    setActiveMenuMessage(null);
+    setReplyingTo(msg);
+    setTimeout(() => {
+      messageInputRef.current?.focus();
+    }, 50);
+  };
+
+  const handleCancelReply = () => {
+    setReplyingTo(null);
+  };
+
+  const handleJumpToMessage = async (targetId) => {
+    if (!targetId) return;
+    const el = document.getElementById(`msg-${targetId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.remove('reply-highlight');
+      void el.offsetWidth;
+      el.classList.add('reply-highlight');
+      setTimeout(() => {
+        el.classList.remove('reply-highlight');
+      }, 1600);
+      return;
+    }
+
+    // Target not in DOM: fetch messages around targetId
+    try {
+      const res = await chatService.getMessages(conversationId, { around_id: targetId, limit: 30 });
+      if (res.success && res.messages?.length > 0 && activeConvIdRef.current === conversationId) {
+        setMessages((prev) => {
+          if (activeConvIdRef.current !== conversationId) return prev;
+          const merged = mergeMessages(prev, res.messages);
+          cacheSet(`conv_msgs_${conversationId}`, merged, 60);
+          return merged;
+        });
+        setTimeout(() => {
+          const targetEl = document.getElementById(`msg-${targetId}`);
+          if (targetEl) {
+            targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            targetEl.classList.remove('reply-highlight');
+            void targetEl.offsetWidth;
+            targetEl.classList.add('reply-highlight');
+            setTimeout(() => {
+              targetEl.classList.remove('reply-highlight');
+            }, 1600);
+          } else {
+            showToast('Original message could not be found.', 'info');
+          }
+        }, 100);
+      } else {
+        showToast('Original message could not be loaded.', 'info');
+      }
+    } catch (err) {
+      showToast('Failed to load replied message.', 'error');
+    }
   };
 
   const handleCopyMessage = (msg) => {
@@ -654,6 +744,18 @@ export const Chat = () => {
 
     const currentId = conversationId;
     const clientMsgId = `cli-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+    const replyTarget = replyingTo;
+    const replyToId = replyTarget?.id && !String(replyTarget.id).startsWith('temp-') ? replyTarget.id : null;
+    const optimisticReplyDetails = replyTarget ? {
+      id: replyTarget.id,
+      sender_profile_id: replyTarget.sender_profile_id,
+      sender_display_name: replyTarget.sender_display_name,
+      content: replyTarget.content,
+      message_type: replyTarget.message_type,
+      duration_seconds: replyTarget.duration_seconds,
+      thumbnail_url: replyTarget.thumbnail_url || replyTarget.image_url || replyTarget.local_preview_url,
+      is_deleted: !!replyTarget.is_deleted,
+    } : null;
 
     // Optimistic UI message rendered immediately
     const optimisticMsg = {
@@ -665,6 +767,8 @@ export const Chat = () => {
       content: text,
       status: 'sending',
       created_at: new Date().toISOString(),
+      reply_to_id: replyToId,
+      reply_to_details: optimisticReplyDetails,
     };
 
     setMessages((prev) => {
@@ -673,16 +777,17 @@ export const Chat = () => {
       return updated;
     });
     setInputText('');
+    setReplyingTo(null);
     setIsTyping(false);
     wsService.sendTyping(currentId, false);
     setTimeout(() => scrollToBottom('smooth'), 40);
 
     // Attempt sending via WebSocket
-    const sentWs = wsService.sendMessage(currentId, text, clientMsgId);
+    const sentWs = wsService.sendMessage(currentId, text, clientMsgId, replyToId);
     if (!sentWs) {
       // Fallback to REST API
       try {
-        const res = await chatService.sendMessage(currentId, text, clientMsgId);
+        const res = await chatService.sendMessage(currentId, text, clientMsgId, replyToId);
         if (res.success && activeConvIdRef.current === currentId) {
           setMessages((prev) => {
             const merged = mergeMessages(prev, [res.message]);
@@ -787,6 +892,18 @@ export const Chat = () => {
     const currentId = conversationId;
     const clientMsgId = `cli-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
     const localBlobUrl = URL.createObjectURL(audioBlob);
+    const replyTarget = replyingTo;
+    const replyToId = replyTarget?.id && !String(replyTarget.id).startsWith('temp-') ? replyTarget.id : null;
+    const optimisticReplyDetails = replyTarget ? {
+      id: replyTarget.id,
+      sender_profile_id: replyTarget.sender_profile_id,
+      sender_display_name: replyTarget.sender_display_name,
+      content: replyTarget.content,
+      message_type: replyTarget.message_type,
+      duration_seconds: replyTarget.duration_seconds,
+      thumbnail_url: replyTarget.thumbnail_url || replyTarget.image_url || replyTarget.local_preview_url,
+      is_deleted: !!replyTarget.is_deleted,
+    } : null;
 
     const optimisticVoiceMsg = {
       id: `temp-${Date.now()}`,
@@ -800,6 +917,8 @@ export const Chat = () => {
       duration_seconds: Math.round(durationSec) || 1,
       status: 'sending',
       created_at: new Date().toISOString(),
+      reply_to_id: replyToId,
+      reply_to_details: optimisticReplyDetails,
     };
 
     setMessages((prev) => {
@@ -807,10 +926,11 @@ export const Chat = () => {
       cacheSet(`conv_msgs_${currentId}`, updated, 60);
       return updated;
     });
+    setReplyingTo(null);
     setTimeout(() => scrollToBottom('smooth'), 50);
 
     try {
-      const res = await chatService.sendVoiceMessage(currentId, audioBlob, durationSec, clientMsgId);
+      const res = await chatService.sendVoiceMessage(currentId, audioBlob, durationSec, clientMsgId, replyToId);
       if (res.success && activeConvIdRef.current === currentId) {
         setMessages((prev) => {
           const merged = mergeMessages(prev, [res.message]);
@@ -827,6 +947,135 @@ export const Chat = () => {
         return updated;
       });
       showToast(err.message || 'Failed to upload voice message. Tap Retry.', 'error');
+    }
+  };
+
+  const [viewerMessage, setViewerMessage] = useState(null);
+  const [isAttachMenuOpen, setIsAttachMenuOpen] = useState(false);
+  const [isCameraModalOpen, setIsCameraModalOpen] = useState(false);
+  const imageInputRef = useRef(null);
+  const attachMenuRef = useRef(null);
+  const pendingImageFilesRef = useRef(new Map());
+
+  // Click-outside listener for photo attachment menu
+  useEffect(() => {
+    if (!isAttachMenuOpen) return;
+    const handleClickOutside = (e) => {
+      if (attachMenuRef.current && !attachMenuRef.current.contains(e.target)) {
+        setIsAttachMenuOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('touchstart', handleClickOutside);
+    return () => {
+      window.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, [isAttachMenuOpen]);
+
+  const sendImageFile = async (file, existingClientMsgId = null) => {
+    const currentId = activeConvIdRef.current;
+    if (!currentId || !file) return;
+
+    if (file.size > 10 * 1024 * 1024) {
+      showToast('Image exceeds 10MB limit.', 'error');
+      return;
+    }
+
+    const clientMsgId = existingClientMsgId || `img-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    pendingImageFilesRef.current.set(clientMsgId, file);
+
+    const replyTarget = replyingTo;
+    const replyToId = replyTarget?.id && !String(replyTarget.id).startsWith('temp-') ? replyTarget.id : null;
+    const optimisticReplyDetails = replyTarget ? {
+      id: replyTarget.id,
+      sender_profile_id: replyTarget.sender_profile_id,
+      sender_display_name: replyTarget.sender_display_name,
+      content: replyTarget.content,
+      message_type: replyTarget.message_type,
+      duration_seconds: replyTarget.duration_seconds,
+      thumbnail_url: replyTarget.thumbnail_url || replyTarget.image_url || replyTarget.local_preview_url,
+      is_deleted: !!replyTarget.is_deleted,
+    } : null;
+
+    const localPreviewUrl = URL.createObjectURL(file);
+
+    let imgWidth = 400;
+    let imgHeight = 300;
+    try {
+      if (window.createImageBitmap) {
+        const bmp = await createImageBitmap(file);
+        imgWidth = bmp.width;
+        imgHeight = bmp.height;
+      }
+    } catch {
+      // fallback
+    }
+
+    const optimisticImgMsg = {
+      id: clientMsgId,
+      client_message_id: clientMsgId,
+      conversation_id: currentId,
+      sender_profile_id: profile?.profile_id,
+      sender_display_name: profile?.display_name,
+      message_type: 'image',
+      image_width: imgWidth,
+      image_height: imgHeight,
+      local_preview_url: localPreviewUrl,
+      status: 'sending',
+      created_at: new Date().toISOString(),
+      reply_to_id: replyToId,
+      reply_to_details: optimisticReplyDetails,
+    };
+
+    setMessages((prev) => {
+      const filtered = prev.filter((m) => m.client_message_id !== clientMsgId);
+      const updated = [...filtered, optimisticImgMsg];
+      cacheSet(`conv_msgs_${currentId}`, updated, 60);
+      return updated;
+    });
+    setReplyingTo(null);
+    setTimeout(() => scrollToBottom('smooth'), 50);
+
+    try {
+      const res = await chatService.sendImageMessage(currentId, file, clientMsgId, null, replyToId);
+      if (res.success && activeConvIdRef.current === currentId) {
+        pendingImageFilesRef.current.delete(clientMsgId);
+        setMessages((prev) => {
+          const merged = mergeMessages(prev, [res.message]);
+          cacheSet(`conv_msgs_${currentId}`, merged, 60);
+          return merged;
+        });
+      }
+    } catch (err) {
+      setMessages((prev) => {
+        const updated = prev.map((m) =>
+          m.client_message_id === clientMsgId ? { ...m, status: 'failed' } : m
+        );
+        cacheSet(`conv_msgs_${currentId}`, updated, 60);
+        return updated;
+      });
+      showToast(err.message || 'Failed to upload photo. Tap to retry.', 'error');
+    }
+  };
+
+  const handleImageInputChange = (e) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    for (const f of files) {
+      sendImageFile(f);
+    }
+    if (imageInputRef.current) {
+      imageInputRef.current.value = '';
+    }
+  };
+
+  const handleRetryImage = (msg) => {
+    const file = pendingImageFilesRef.current.get(msg.client_message_id);
+    if (file) {
+      sendImageFile(file, msg.client_message_id);
+    } else {
+      showToast('Please re-select the photo to retry.', 'info');
     }
   };
 
@@ -954,132 +1203,27 @@ export const Chat = () => {
             const isMe = msg.sender_profile_id === profile?.profile_id;
             const isEditing = editingMessageId === msg.id;
             return (
-              <div
+              <SwipeableMessageItem
                 key={msg.client_message_id || msg.id || index}
-                className={`flex flex-col group relative select-text ${isMe ? 'items-end' : 'items-start'}`}
-                onTouchStart={(e) => handleTouchStart(msg, e)}
+                message={msg}
+                isMe={isMe}
+                isEditing={isEditing}
+                editingText={editingText}
+                setEditingText={setEditingText}
+                handleSaveEdit={handleSaveEdit}
+                handleCancelEdit={handleCancelEdit}
+                handleRetry={handleRetry}
+                handleRetryImage={handleRetryImage}
+                setViewerMessage={setViewerMessage}
+                formatMessageTime={formatMessageTime}
+                onThreeDotClick={handleThreeDotClick}
+                onReply={handleStartReply}
+                onJumpToReply={handleJumpToMessage}
+                onTouchStart={handleTouchStart}
                 onTouchMove={handleTouchMove}
                 onTouchEnd={handleTouchEnd}
-                onContextMenu={(e) => handleContextMenu(msg, e)}
-              >
-                <div className="flex items-center gap-1 max-w-[85%] sm:max-w-[75%]">
-                  {/* Left 3-dot trigger for outgoing messages */}
-                  {isMe && !msg.is_deleted && (
-                    <button
-                      type="button"
-                      onClick={(e) => handleThreeDotClick(msg, e)}
-                      className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800/60 transition-opacity cursor-pointer shrink-0"
-                      title="Message options"
-                      aria-label="Message options"
-                    >
-                      <MoreVertical className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-
-                  <div
-                    className={`px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm break-words relative ${
-                      isMe
-                        ? 'bg-gradient-to-r from-pink-500 to-indigo-600 text-white rounded-br-xs shadow-pink-500/10'
-                        : 'bg-slate-800 border border-slate-700/60 text-slate-100 rounded-bl-xs'
-                    }`}
-                  >
-                    {msg.is_deleted ? (
-                      <div className="flex items-center gap-1.5 italic text-xs opacity-70 py-0.5">
-                        <Ban className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                        <span>This message was deleted</span>
-                      </div>
-                    ) : isEditing ? (
-                      <div className="flex flex-col gap-2 min-w-[200px] sm:min-w-[260px] py-1">
-                        <textarea
-                          value={editingText}
-                          onChange={(e) => setEditingText(e.target.value)}
-                          className="w-full p-2 text-xs sm:text-sm bg-slate-950/70 border border-pink-400/50 rounded-xl text-white resize-none focus:outline-none focus:ring-1 focus:ring-pink-400"
-                          rows={2}
-                          autoFocus
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !e.shiftKey) {
-                              e.preventDefault();
-                              handleSaveEdit(msg.id);
-                            }
-                          }}
-                        />
-                        <div className="flex justify-end gap-1.5">
-                          <button
-                            type="button"
-                            onClick={handleCancelEdit}
-                            className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-slate-700/60 text-slate-300 hover:bg-slate-700 transition-colors cursor-pointer"
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleSaveEdit(msg.id)}
-                            className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-pink-500 hover:bg-pink-600 text-white shadow transition-colors cursor-pointer"
-                          >
-                            Save
-                          </button>
-                        </div>
-                      </div>
-                    ) : msg.message_type === 'voice' ? (
-                      <VoiceMessage
-                        message={msg}
-                        isMe={isMe}
-                        formatTime={formatMessageTime}
-                      />
-                    ) : (
-                      <p className="whitespace-pre-wrap">{msg.content}</p>
-                    )}
-
-                    <div
-                      className={`flex items-center justify-end gap-1 text-[10px] mt-1 ${
-                        isMe ? 'text-pink-100/70' : 'text-slate-400'
-                      }`}
-                    >
-                      <span>{formatMessageTime(msg.created_at)}</span>
-                      {msg.is_edited && !msg.is_deleted && (
-                        <span className="italic text-[9px] opacity-80">(edited)</span>
-                      )}
-                      {isMe && !msg.is_deleted && (
-                        <span className="ml-1 inline-flex items-center">
-                          {msg.status === 'failed' ? (
-                            <button
-                              type="button"
-                              onClick={() => handleRetry(msg)}
-                              className="inline-flex items-center gap-1 text-rose-300 hover:text-white bg-rose-500/20 hover:bg-rose-500/30 px-1.5 py-0.5 rounded text-[10px] cursor-pointer transition-colors"
-                              title="Sending failed. Click to retry."
-                              aria-label="Retry sending message"
-                            >
-                              <AlertCircle className="w-3 h-3 text-rose-400" />
-                              <span className="font-semibold underline">Retry</span>
-                            </button>
-                          ) : msg.status === 'sending' ? (
-                            <Clock className="w-3 h-3 animate-spin text-pink-200/50" title="Sending..." />
-                          ) : msg.status === 'seen' ? (
-                            <CheckCheck className="w-3.5 h-3.5 text-pink-200 font-bold" title="Seen" />
-                          ) : msg.status === 'delivered' ? (
-                            <CheckCheck className="w-3.5 h-3.5 text-slate-400/80" title="Delivered" />
-                          ) : (
-                            <Check className="w-3.5 h-3.5 text-pink-200/60" title="Sent" />
-                          )}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Right 3-dot trigger for incoming messages */}
-                  {!isMe && !msg.is_deleted && (
-                    <button
-                      type="button"
-                      onClick={(e) => handleThreeDotClick(msg, e)}
-                      className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800/60 transition-opacity cursor-pointer shrink-0"
-                      title="Message options"
-                      aria-label="Message options"
-                    >
-                      <MoreVertical className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-              </div>
+                onContextMenu={handleContextMenu}
+              />
             );
           })
         )}
@@ -1107,175 +1251,281 @@ export const Chat = () => {
         </button>
       )}
 
-      {/* Bottom Input Field */}
-      {isRecording ? (
-        <div className="p-2.5 sm:p-3 md:p-4 bg-slate-950/90 border-t border-slate-800 shrink-0 pb-safe">
-          {isLocked ? (
-            /* Locked Hands-free Recording Bar */
-            <div className="flex items-center justify-between w-full p-2 bg-slate-900/90 rounded-2xl border border-slate-700/60 shadow-xl backdrop-blur-md">
-              {/* Left: Delete / Trash */}
-              <button
-                type="button"
-                onClick={cancelRecording}
-                className="p-2.5 sm:p-3 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0"
-                title="Discard recording"
-                aria-label="Discard recording"
-              >
-                <Trash2 className="w-4 sm:w-5 h-4 sm:h-5" />
-              </button>
-
-              {/* Middle: Live Timer + Waveform */}
-              <div className="flex items-center gap-1.5 sm:gap-3">
+      {/* Bottom Composer Area with Docked Reply Preview */}
+      <div className="shrink-0 border-t border-slate-800 bg-slate-950/90 pb-safe">
+        {replyingTo && (
+          <div className="px-3 sm:px-4 py-2 bg-slate-900/95 border-b border-slate-800/80 flex items-center justify-between gap-3 text-xs animate-in fade-in slide-in-from-bottom-2 duration-150 backdrop-blur-md">
+            <div className="flex items-center gap-2.5 min-w-0 flex-grow">
+              <div className="w-1 self-stretch rounded-full bg-gradient-to-b from-pink-500 to-indigo-500 shrink-0" />
+              <div className="min-w-0 flex-grow">
                 <div className="flex items-center gap-1.5">
-                  <span className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ${isPaused ? 'bg-amber-400' : 'bg-rose-500 animate-pulse motion-reduce:animate-none'}`} />
-                  <span className="font-mono text-xs sm:text-sm font-bold text-white min-w-[32px] sm:min-w-[38px]">
+                  <CornerUpLeft className="w-3.5 h-3.5 text-pink-400 shrink-0" />
+                  <span className="font-semibold text-pink-400 truncate text-[11px] sm:text-xs">
+                    Replying to {replyingTo.sender_profile_id === profile?.profile_id ? 'yourself' : (replyingTo.sender_display_name || replyingTo.sender_profile_id || 'User')}
+                  </span>
+                </div>
+                <div className="text-slate-300 text-[11px] truncate mt-0.5">
+                  {replyingTo.is_deleted ? (
+                    <span className="italic text-slate-500">This message was deleted</span>
+                  ) : (
+                    replyingTo.content ||
+                    (replyingTo.message_type === 'image'
+                      ? '📷 Photo'
+                      : replyingTo.message_type === 'voice'
+                      ? `🎤 Voice message ${replyingTo.duration_seconds ? `(${replyingTo.duration_seconds}s)` : ''}`
+                      : 'Message')
+                  )}
+                </div>
+              </div>
+              {(replyingTo.thumbnail_url || replyingTo.image_url || replyingTo.local_preview_url) && !replyingTo.is_deleted && (
+                <img
+                  src={replyingTo.thumbnail_url || replyingTo.image_url || replyingTo.local_preview_url}
+                  alt="Preview"
+                  className="w-9 h-9 rounded-lg object-cover shrink-0 border border-slate-700"
+                />
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={handleCancelReply}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors shrink-0 cursor-pointer"
+              title="Cancel reply"
+              aria-label="Cancel reply"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        {isRecording ? (
+          <div className="p-2.5 sm:p-3 md:p-4">
+            {isLocked ? (
+              /* Locked Hands-free Recording Bar */
+              <div className="flex items-center justify-between w-full p-2 bg-slate-900/90 rounded-2xl border border-slate-700/60 shadow-xl backdrop-blur-md">
+                {/* Left: Delete / Trash */}
+                <button
+                  type="button"
+                  onClick={cancelRecording}
+                  className="p-2.5 sm:p-3 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0"
+                  title="Discard recording"
+                  aria-label="Discard recording"
+                >
+                  <Trash2 className="w-4 sm:w-5 h-4 sm:h-5" />
+                </button>
+
+                {/* Middle: Live Timer + Waveform */}
+                <div className="flex items-center gap-1.5 sm:gap-3">
+                  <div className="flex items-center gap-1.5">
+                    <span className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ${isPaused ? 'bg-amber-400' : 'bg-rose-500 animate-pulse motion-reduce:animate-none'}`} />
+                    <span className="font-mono text-xs sm:text-sm font-bold text-white min-w-[32px] sm:min-w-[38px]">
+                      {formatRecordingTime(recordDuration)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1 h-5 sm:h-6 px-1 sm:px-2">
+                    {audioLevels.map((lvl, idx) => (
+                      <div
+                        key={idx}
+                        style={{ height: `${Math.round(lvl * 100)}%` }}
+                        className={`w-0.5 sm:w-1 rounded-full transition-all duration-75 ${
+                          isPaused ? 'bg-slate-600' : 'bg-pink-400'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {/* Right: Preview / Resume / Pause + Send */}
+                <div className="flex items-center gap-1.5 sm:gap-2">
+                  {isPaused && (
+                    <button
+                      type="button"
+                      onClick={togglePreview}
+                      className={`p-2.5 sm:p-3 rounded-xl transition-colors cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center ${
+                        isPlayingPreview ? 'bg-pink-500/20 text-pink-400 border border-pink-500/30' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
+                      }`}
+                      title={isPlayingPreview ? 'Pause preview' : 'Listen to recording'}
+                      aria-label={isPlayingPreview ? 'Pause preview' : 'Listen to recording'}
+                    >
+                      {isPlayingPreview ? <Pause className="w-4 sm:w-5 h-4 sm:h-5 fill-current" /> : <Play className="w-4 sm:w-5 h-4 sm:h-5 fill-current" />}
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={isPaused ? resumeRecording : pauseRecording}
+                    className="p-2.5 sm:p-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center"
+                    title={isPaused ? 'Resume recording' : 'Pause recording'}
+                    aria-label={isPaused ? 'Resume recording' : 'Pause recording'}
+                  >
+                    {isPaused ? <Mic className="w-4 sm:w-5 h-4 sm:h-5 text-pink-400" /> : <Pause className="w-4 sm:w-5 h-4 sm:h-5 fill-current" />}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={stopAndSend}
+                    className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 active:scale-95 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0"
+                    title="Send voice message"
+                    aria-label="Send voice message"
+                  >
+                    <Send className="w-4 sm:w-5 h-4 sm:h-5" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* Hold-to-record Floating Bar */
+              <div className="relative flex items-center justify-between w-full p-2 bg-slate-900/95 rounded-2xl border border-slate-700/60 shadow-xl backdrop-blur-md">
+                {/* Slide to lock indicator */}
+                <div
+                  className={`absolute -top-12 right-2 px-3 py-1.5 rounded-xl bg-slate-800/90 border border-slate-700 text-xs flex items-center gap-1.5 transition-all shadow-lg ${
+                    isNearLock ? 'text-pink-400 scale-105 border-pink-500/50' : 'text-slate-400'
+                  }`}
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>Slide up to lock</span>
+                </div>
+
+                {/* Status: Red dot + timer */}
+                <div className="flex items-center gap-2 px-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse motion-reduce:animate-none" />
+                  <span className="font-mono text-xs sm:text-sm font-bold text-white">
                     {formatRecordingTime(recordDuration)}
                   </span>
                 </div>
 
-                <div className="flex items-center gap-1 h-5 sm:h-6 px-1 sm:px-2">
-                  {audioLevels.map((lvl, idx) => (
-                    <div
-                      key={idx}
-                      style={{ height: `${Math.round(lvl * 100)}%` }}
-                      className={`w-0.5 sm:w-1 rounded-full transition-all duration-75 ${
-                        isPaused ? 'bg-slate-600' : 'bg-pink-400'
-                      }`}
-                    />
-                  ))}
+                {/* Slide to cancel indicator */}
+                <div
+                  className={`flex items-center gap-1.5 sm:gap-2 transition-all ${
+                    isCanceling ? 'text-rose-400 font-semibold scale-105' : 'text-slate-400 text-[11px] sm:text-xs'
+                  }`}
+                >
+                  <Trash2 className="w-3.5 sm:w-4 h-3.5 sm:h-4" />
+                  <span>{isCanceling ? 'Release to cancel' : '< Slide to cancel'}</span>
                 </div>
-              </div>
 
-              {/* Right: Preview / Resume / Pause + Send */}
-              <div className="flex items-center gap-1.5 sm:gap-2">
-                {isPaused && (
+                {/* Active Mic + Direct Send Button */}
+                <div className="flex items-center gap-1.5 sm:gap-2">
+                  <div
+                    onPointerMove={handlePointerMove}
+                    onPointerUp={handlePointerUp}
+                    onPointerCancel={handlePointerCancel}
+                    onClick={stopAndSend}
+                    className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-600 text-white shadow-lg shadow-rose-500/30 scale-105 animate-pulse motion-reduce:animate-none cursor-pointer shrink-0 min-w-[44px] min-h-[44px] flex items-center justify-center"
+                    title="Release or tap to send"
+                  >
+                    <Mic className="w-5 h-5" />
+                  </div>
+
                   <button
                     type="button"
-                    onClick={togglePreview}
-                    className={`p-2.5 sm:p-3 rounded-xl transition-colors cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center ${
-                      isPlayingPreview ? 'bg-pink-500/20 text-pink-400 border border-pink-500/30' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
-                    }`}
-                    title={isPlayingPreview ? 'Pause preview' : 'Listen to recording'}
-                    aria-label={isPlayingPreview ? 'Pause preview' : 'Listen to recording'}
+                    onClick={stopAndSend}
+                    className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0"
+                    title="Send voice message"
+                    aria-label="Send voice message"
                   >
-                    {isPlayingPreview ? <Pause className="w-4 sm:w-5 h-4 sm:h-5 fill-current" /> : <Play className="w-4 sm:w-5 h-4 sm:h-5 fill-current" />}
+                    <Send className="w-4 sm:w-5 h-4 sm:h-5" />
                   </button>
-                )}
-
-                <button
-                  type="button"
-                  onClick={isPaused ? resumeRecording : pauseRecording}
-                  className="p-2.5 sm:p-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center"
-                  title={isPaused ? 'Resume recording' : 'Pause recording'}
-                  aria-label={isPaused ? 'Resume recording' : 'Pause recording'}
-                >
-                  {isPaused ? <Mic className="w-4 sm:w-5 h-4 sm:h-5 text-pink-400" /> : <Pause className="w-4 sm:w-5 h-4 sm:h-5 fill-current" />}
-                </button>
-
-                <button
-                  type="button"
-                  onClick={stopAndSend}
-                  className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 active:scale-95 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0"
-                  title="Send voice message"
-                  aria-label="Send voice message"
-                >
-                  <Send className="w-4 sm:w-5 h-4 sm:h-5" />
-                </button>
-              </div>
-            </div>
-          ) : (
-            /* Hold-to-record Floating Bar */
-            <div className="relative flex items-center justify-between w-full p-2 bg-slate-900/95 rounded-2xl border border-slate-700/60 shadow-xl backdrop-blur-md">
-              {/* Slide to lock indicator */}
-              <div
-                className={`absolute -top-12 right-2 px-3 py-1.5 rounded-xl bg-slate-800/90 border border-slate-700 text-xs flex items-center gap-1.5 transition-all shadow-lg ${
-                  isNearLock ? 'text-pink-400 scale-105 border-pink-500/50' : 'text-slate-400'
-                }`}
-              >
-                <Lock className="w-3.5 h-3.5" />
-                <span>Slide up to lock</span>
-              </div>
-
-              {/* Status: Red dot + timer */}
-              <div className="flex items-center gap-2 px-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse motion-reduce:animate-none" />
-                <span className="font-mono text-xs sm:text-sm font-bold text-white">
-                  {formatRecordingTime(recordDuration)}
-                </span>
-              </div>
-
-              {/* Slide to cancel indicator */}
-              <div
-                className={`flex items-center gap-1.5 sm:gap-2 transition-all ${
-                  isCanceling ? 'text-rose-400 font-semibold scale-105' : 'text-slate-400 text-[11px] sm:text-xs'
-                }`}
-              >
-                <Trash2 className="w-3.5 sm:w-4 h-3.5 sm:h-4" />
-                <span>{isCanceling ? 'Release to cancel' : '< Slide to cancel'}</span>
-              </div>
-
-              {/* Active Mic + Direct Send Button */}
-              <div className="flex items-center gap-1.5 sm:gap-2">
-                <div
-                  onPointerMove={handlePointerMove}
-                  onPointerUp={handlePointerUp}
-                  onPointerCancel={handlePointerCancel}
-                  onClick={stopAndSend}
-                  className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-600 text-white shadow-lg shadow-rose-500/30 scale-105 animate-pulse motion-reduce:animate-none cursor-pointer shrink-0 min-w-[44px] min-h-[44px] flex items-center justify-center"
-                  title="Release or tap to send"
-                >
-                  <Mic className="w-5 h-5" />
                 </div>
-
-                <button
-                  type="button"
-                  onClick={stopAndSend}
-                  className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0"
-                  title="Send voice message"
-                  aria-label="Send voice message"
-                >
-                  <Send className="w-4 sm:w-5 h-4 sm:h-5" />
-                </button>
               </div>
-            </div>
-          )}
-        </div>
-      ) : (
-        <form
-          onSubmit={handleSendMessage}
-          className="p-2.5 sm:p-3 md:p-4 bg-slate-950/90 border-t border-slate-800 flex items-end gap-2 shrink-0 pb-safe"
-        >
-          <textarea
-            rows={1}
-            placeholder="Type a message..."
-            value={inputText}
-            onChange={handleInputChange}
-            onKeyDown={handleKeyDown}
-            className="flex-grow px-3.5 sm:px-4 py-2.5 sm:py-3 rounded-2xl bg-slate-900 border border-slate-800 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-pink-500 focus:ring-1 focus:ring-pink-500 transition-all resize-none max-h-32 leading-relaxed"
-          />
+            )}
+          </div>
+        ) : (
+          <form
+            onSubmit={handleSendMessage}
+            className="p-2.5 sm:p-3 md:p-4 flex items-end gap-2"
+          >
+            {/* Photo Attachment Menu Trigger & Popover */}
+            <div className="relative shrink-0" ref={attachMenuRef}>
+              <button
+                type="button"
+                onClick={() => setIsAttachMenuOpen((prev) => !prev)}
+                className={`p-2.5 sm:p-3 rounded-2xl border transition-all cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center ${
+                  isAttachMenuOpen
+                    ? 'bg-pink-500/20 border-pink-500/60 text-pink-400'
+                    : 'bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-pink-500/40 text-slate-400 hover:text-pink-400'
+                }`}
+                title="Attach media"
+                aria-label="Attach media"
+              >
+                <ImageIcon className="w-5 h-5" />
+              </button>
 
-          {inputText.trim() ? (
-            <button
-              type="submit"
-              className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer shrink-0 min-w-[44px] min-h-[44px] flex items-center justify-center"
-              title="Send message"
-              aria-label="Send message"
-            >
-              <Send className="w-4 sm:w-5 h-4 sm:h-5" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              onPointerDown={handlePointerDown}
-              className="p-2.5 sm:p-3 rounded-2xl bg-slate-800 hover:bg-slate-700 active:bg-pink-600 text-slate-300 hover:text-white transition-all cursor-pointer shrink-0 touch-none select-none min-w-[44px] min-h-[44px] flex items-center justify-center"
-              title="Tap to record hands-free, hold to speak"
-              aria-label="Record voice message"
-            >
-              <Mic className="w-4 sm:w-5 h-4 sm:h-5" />
-            </button>
-          )}
-        </form>
-      )}
+              {/* Attachment Options Popover */}
+              {isAttachMenuOpen && (
+                <div className="absolute bottom-full left-0 mb-2 w-52 p-1.5 rounded-2xl bg-slate-900/95 border border-slate-800 shadow-2xl backdrop-blur-md z-30 flex flex-col gap-1 animate-in fade-in slide-in-from-bottom-2 duration-150">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAttachMenuOpen(false);
+                      imageInputRef.current?.click();
+                    }}
+                    className="w-full px-3 py-2.5 rounded-xl hover:bg-slate-800/80 text-slate-200 hover:text-white flex items-center gap-2.5 text-xs font-semibold transition-colors cursor-pointer text-left"
+                  >
+                    <div className="w-7 h-7 rounded-lg bg-pink-500/20 text-pink-400 flex items-center justify-center shrink-0">
+                      <ImageIcon className="w-4 h-4" />
+                    </div>
+                    <span>Choose from Gallery</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAttachMenuOpen(false);
+                      setIsCameraModalOpen(true);
+                    }}
+                    className="w-full px-3 py-2.5 rounded-xl hover:bg-slate-800/80 text-slate-200 hover:text-white flex items-center gap-2.5 text-xs font-semibold transition-colors cursor-pointer text-left"
+                  >
+                    <div className="w-7 h-7 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center shrink-0">
+                      <Camera className="w-4 h-4" />
+                    </div>
+                    <span>Take Photo</span>
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+              multiple
+              onChange={handleImageInputChange}
+              className="hidden"
+            />
+
+            <textarea
+              ref={messageInputRef}
+              rows={1}
+              placeholder="Type a message..."
+              value={inputText}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              className="flex-grow px-3.5 sm:px-4 py-2.5 sm:py-3 rounded-2xl bg-slate-900 border border-slate-800 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-pink-500 focus:ring-1 focus:ring-pink-500 transition-all resize-none max-h-32 leading-relaxed"
+            />
+
+            {inputText.trim() ? (
+              <button
+                type="submit"
+                className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer shrink-0 min-w-[44px] min-h-[44px] flex items-center justify-center"
+                title="Send message"
+                aria-label="Send message"
+              >
+                <Send className="w-4 sm:w-5 h-4 sm:h-5" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onPointerDown={handlePointerDown}
+                className="p-2.5 sm:p-3 rounded-2xl bg-slate-800 hover:bg-slate-700 active:bg-pink-600 text-slate-300 hover:text-white transition-all cursor-pointer shrink-0 touch-none select-none min-w-[44px] min-h-[44px] flex items-center justify-center"
+                title="Tap to record hands-free, hold to speak"
+                aria-label="Record voice message"
+              >
+                <Mic className="w-4 sm:w-5 h-4 sm:h-5" />
+              </button>
+            )}
+          </form>
+        )}
+      </div>
 
       {/* Floating Action Menu */}
       {activeMenuMessage && menuPosition && (
@@ -1284,6 +1534,17 @@ export const Chat = () => {
           className="fixed z-50 min-w-[150px] bg-slate-900/95 border border-slate-700/80 rounded-xl shadow-2xl py-1 text-xs text-slate-200 backdrop-blur-md animate-in fade-in zoom-in-95 duration-100"
           onClick={(e) => e.stopPropagation()}
         >
+          {!activeMenuMessage.is_deleted && (
+            <button
+              type="button"
+              onClick={() => handleStartReply(activeMenuMessage)}
+              className="w-full px-3.5 py-2 text-left hover:bg-slate-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+            >
+              <Reply className="w-3.5 h-3.5 text-pink-400" />
+              <span>Reply</span>
+            </button>
+          )}
+
           {activeMenuMessage.message_type === 'text' && activeMenuMessage.content && (
             <button
               type="button"
@@ -1377,6 +1638,21 @@ export const Chat = () => {
           </div>
         )}
       </Modal>
+
+      {/* Lightbox Fullscreen Image Viewer */}
+      {viewerMessage && (
+        <ImageViewerModal
+          message={viewerMessage}
+          onClose={() => setViewerMessage(null)}
+        />
+      )}
+
+      {/* Live Camera Capture Modal */}
+      <CameraCaptureModal
+        isOpen={isCameraModalOpen}
+        onClose={() => setIsCameraModalOpen(false)}
+        onCapture={(capturedFile) => sendImageFile(capturedFile)}
+      />
     </div>
   );
 };

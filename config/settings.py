@@ -93,20 +93,23 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 ASGI_APPLICATION = 'config.asgi.application'
 
-# Database Configuration (Neon PostgreSQL & Local Dev)
+# Database Configuration (PostgreSQL on Coolify, Neon, or Local Dev)
 DATABASE_URL = os.getenv('DATABASE_URL')
 if DATABASE_URL:
     is_neon_pooler = '-pooler' in DATABASE_URL
+    ssl_req = 'neon.tech' in DATABASE_URL or os.getenv('DB_SSL_REQUIRE', 'False').lower() in ('true', '1')
     db_config = dj_database_url.config(
         default=DATABASE_URL,
         conn_max_age=600,
         conn_health_checks=True,
-        ssl_require=True,
+        ssl_require=ssl_req,
     )
     if 'OPTIONS' not in db_config:
         db_config['OPTIONS'] = {}
-    if 'sslmode' not in db_config['OPTIONS']:
+    if ssl_req:
         db_config['OPTIONS']['sslmode'] = 'require'
+    elif 'sslmode' in db_config['OPTIONS']:
+        del db_config['OPTIONS']['sslmode']
 
     # When using Neon pooled connection, disable server-side cursors for compatibility with transaction pooling
     if is_neon_pooler:
@@ -183,18 +186,19 @@ REST_FRAMEWORK = {
     'EXCEPTION_HANDLER': 'accounts.utils.custom_exception_handler',
 }
 
+PASSWORD_HASHERS = [
+    'django.contrib.auth.hashers.Argon2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2PasswordHasher',
+    'django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher',
+    'django.contrib.auth.hashers.BCryptSHA256PasswordHasher',
+]
+
 AUTH_PASSWORD_VALIDATORS = [
     {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
-    },
-    {
         'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+        'OPTIONS': {
+            'min_length': 4,
+        }
     },
 ]
 
@@ -270,6 +274,8 @@ CORS_ALLOWED_ORIGINS = [
     "https://lynqoweb.vercel.app",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
@@ -295,7 +301,15 @@ CSRF_TRUSTED_ORIGINS = [
     "https://*.onrender.com",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
 ]
+env_csrf = os.getenv("CSRF_TRUSTED_ORIGINS")
+if env_csrf:
+    for orig in env_csrf.split(","):
+        orig = orig.strip()
+        if orig and orig not in CSRF_TRUSTED_ORIGINS:
+            CSRF_TRUSTED_ORIGINS.append(orig)
 
 # Session & Cookie Security:
 # Cross-origin cookies (Vercel -> Render) REQUIRE SameSite='None' and Secure=True in production

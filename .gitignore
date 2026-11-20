@@ -36,3 +36,15 @@ public_key.pem
 
 # Screenshots & Local Benchmarks
 mobile_screenshots/
+
+# Local performance reports
+benchmark_*.json
+lh_*.json
+*_baseline.json
+*_results.json
+
+# Local test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.log

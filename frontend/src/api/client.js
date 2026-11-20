@@ -1,9 +1,9 @@
 import axios from 'axios';
-import { cacheInvalidate } from '../utils/cache';
+import { cacheInvalidate } from '../utils/cache.js';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || (
-  typeof window !== 'undefined' && window.location.origin.includes(':5173')
-    ? 'http://127.0.0.1:8000'
+const API_BASE_URL = (typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.VITE_API_URL : null) || (
+  typeof window !== 'undefined' && window.location?.origin?.includes(':5173')
+    ? 'http://127.0.0.1:8001'
     : ''
 );
 

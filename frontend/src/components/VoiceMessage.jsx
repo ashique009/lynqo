@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Play, Pause, RotateCcw, Loader2 } from 'lucide-react';
 import { audioPlayerManager } from '../utils/audioPlayerManager';
-import client, { API_BASE_URL } from '../api/client';
+import { getAuthenticatedMediaUrl } from '../utils/mediaUrl';
 
 export const VoiceMessage = ({
   message,
@@ -73,26 +73,15 @@ export const VoiceMessage = ({
     }
 
     // If it's already a local blob URL (optimistic sending)
-    if (message.audio_url.startsWith('blob:')) {
+    if (message.audio_url.startsWith('blob:') || message.audio_url.startsWith('data:')) {
       blobUrlRef.current = message.audio_url;
       return message.audio_url;
     }
 
-    // Fetch through authenticated API client to attach auth headers
-    const url = message.audio_url.startsWith('http')
-      ? message.audio_url
-      : `${API_BASE_URL || ''}${message.audio_url}`;
-
-    try {
-      const response = await client.get(url, { responseType: 'blob' });
-      const blob = response instanceof Blob ? response : new Blob([response]);
-      const objectUrl = URL.createObjectURL(blob);
-      blobUrlRef.current = objectUrl;
-      return objectUrl;
-    } catch (err) {
-      // Fallback to direct URL if blob fetch fails
-      return url;
-    }
+    // Fetch through authenticated API client or cache
+    const objectUrl = await getAuthenticatedMediaUrl(message.audio_url);
+    blobUrlRef.current = objectUrl;
+    return objectUrl;
   }, [message.audio_url]);
 
   const initAudio = useCallback(async () => {
@@ -105,6 +94,7 @@ export const VoiceMessage = ({
       const src = await getAudioSource();
       const audio = new Audio(src);
       audio.playbackRate = playbackSpeed;
+      audio.preload = 'auto';
 
       audio.onloadedmetadata = () => {
         if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
@@ -122,7 +112,15 @@ export const VoiceMessage = ({
         audioPlayerManager.stop(messageId);
       };
 
-      audio.onerror = () => {
+      audio.onerror = (e) => {
+        console.warn('Audio element error:', e);
+        if (audioRef.current) {
+          try {
+            audioRef.current.pause();
+            audioRef.current.src = '';
+          } catch (err) {}
+          audioRef.current = null;
+        }
         setHasError(true);
         setIsLoading(false);
         setIsPlaying(false);
@@ -157,6 +155,12 @@ export const VoiceMessage = ({
         audio = await initAudio();
       }
 
+      // If finished, reset to beginning before replay
+      if (audio.currentTime >= duration || audio.ended) {
+        audio.currentTime = 0;
+        setCurrentTime(0);
+      }
+
       // Notify manager to pause any other currently playing message
       audioPlayerManager.play(messageId, pauseSelf);
 
@@ -165,6 +169,13 @@ export const VoiceMessage = ({
       setHasError(false);
     } catch (err) {
       console.error('Failed to play voice message:', err);
+      if (audioRef.current) {
+        try {
+          audioRef.current.pause();
+          audioRef.current.src = '';
+        } catch (e) {}
+        audioRef.current = null;
+      }
       setHasError(true);
       setIsPlaying(false);
     }

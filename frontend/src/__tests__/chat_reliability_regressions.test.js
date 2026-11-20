@@ -216,3 +216,77 @@ test('7. Preventing duplicate WebSocket connections during authentication', () =
     globalThis.WebSocket = origWs;
   }
 });
+
+test('8. WebSocket message queue retains messages while CONNECTING and flushes on open', () => {
+  const sentPayloads = [];
+  class MockQueuingWebSocket {
+    static CONNECTING = 0;
+    static OPEN = 1;
+    static CLOSING = 2;
+    static CLOSED = 3;
+
+    constructor(url) {
+      this.url = url;
+      this.readyState = MockQueuingWebSocket.CONNECTING;
+    }
+    send(data) {
+      sentPayloads.push(JSON.parse(data));
+    }
+    close() {
+      this.readyState = MockQueuingWebSocket.CLOSED;
+    }
+  }
+
+  const origWs = globalThis.WebSocket;
+  globalThis.WebSocket = MockQueuingWebSocket;
+
+  try {
+    wsService.disconnect();
+    wsService.connect('test-queue-token');
+
+    // While CONNECTING: joinConversation and send message
+    wsService.joinConversation(42);
+    wsService.sendMessage(42, 'Queued hello', 'cli-q-1');
+
+    assert.equal(wsService.messageQueue.length, 2);
+    assert.equal(sentPayloads.length, 0);
+
+    // Socket opens
+    wsService.ws.readyState = MockQueuingWebSocket.OPEN;
+    wsService.ws.onopen();
+
+    // Queued items should now be flushed!
+    assert.equal(wsService.messageQueue.length, 0);
+    assert.equal(sentPayloads.length, 3); // 2 queued + 1 re-join from onopen
+    assert.equal(sentPayloads[0].type, 'join_conversation');
+    assert.equal(sentPayloads[0].conversation_id, 42);
+    assert.equal(sentPayloads[1].type, 'chat_message');
+    assert.equal(sentPayloads[1].content, 'Queued hello');
+  } finally {
+    wsService.disconnect();
+    globalThis.WebSocket = origWs;
+  }
+});
+
+test('9. Merging conversation_update payload directly into active conversation messages without duplicates', () => {
+  const existing = [
+    { id: 201, content: 'Existing message', status: 'sent', created_at: '2026-11-18T10:00:00Z' }
+  ];
+
+  const updateMessage = {
+    id: 202,
+    conversation_id: 32,
+    content: 'Incoming from conversation_update',
+    status: 'sent',
+    created_at: '2026-11-18T10:01:00Z'
+  };
+
+  const merged = mergeMessages(existing, [updateMessage]);
+  assert.equal(merged.length, 2);
+  assert.equal(merged[1].id, 202);
+  assert.equal(merged[1].content, 'Incoming from conversation_update');
+
+  // Merging again (idempotent / duplicate broadcast)
+  const reMerged = mergeMessages(merged, [updateMessage]);
+  assert.equal(reMerged.length, 2);
+});

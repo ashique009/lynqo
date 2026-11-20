@@ -18,18 +18,41 @@ export const chatService = {
     if (params.limit) query.append('limit', params.limit);
     if (params.before_id) query.append('before_id', params.before_id);
     if (params.since_id) query.append('since_id', params.since_id);
+    if (params.around_id) query.append('around_id', params.around_id);
     const qs = query.toString() ? `?${query.toString()}` : '';
     return client.get(`/api/auth/conversations/${conversationId}/messages/${qs}`);
   },
 
-  async sendMessage(conversationId, content, clientMessageId = null) {
-    return client.post(`/api/auth/conversations/${conversationId}/messages/send/`, {
+  async sendMessage(conversationId, content, clientMessageId = null, replyToId = null) {
+    const payload = {
       content,
       client_message_id: clientMessageId || `web-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+    };
+    if (replyToId) {
+      payload.reply_to_id = replyToId;
+    }
+    return client.post(`/api/auth/conversations/${conversationId}/messages/send/`, payload);
+  },
+
+  async sendImageMessage(conversationId, imageFile, clientMessageId = null, onProgress = null, replyToId = null) {
+    const formData = new FormData();
+    formData.append('image', imageFile);
+    if (clientMessageId) {
+      formData.append('client_message_id', clientMessageId);
+    }
+    if (replyToId) {
+      formData.append('reply_to_id', replyToId);
+    }
+
+    return client.post(`/api/auth/conversations/${conversationId}/messages/image/`, formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+      },
+      onUploadProgress: onProgress,
     });
   },
 
-  async sendVoiceMessage(conversationId, audioBlob, durationSeconds, clientMessageId = null) {
+  async sendVoiceMessage(conversationId, audioBlob, durationSeconds, clientMessageId = null, replyToId = null) {
     const formData = new FormData();
     const mime = audioBlob.type || 'audio/webm';
     let ext = 'webm';
@@ -42,6 +65,9 @@ export const chatService = {
     formData.append('duration', String(Math.round(durationSeconds) || 1));
     if (clientMessageId) {
       formData.append('client_message_id', clientMessageId);
+    }
+    if (replyToId) {
+      formData.append('reply_to_id', replyToId);
     }
 
     return client.post(`/api/auth/conversations/${conversationId}/messages/voice/`, formData, {

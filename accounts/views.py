@@ -1,14 +1,17 @@
 import secrets
 import time
 import os
+import io
+import mimetypes
 import logging
+from PIL import Image
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
 from django.contrib.auth.hashers import make_password, check_password
 from django.db import transaction, models
 from django.core.cache import cache
-from django.http import FileResponse, HttpResponseRedirect
+from django.http import HttpResponse, FileResponse, HttpResponseRedirect
 from django.utils import timezone
 from rest_framework import permissions, status
 from rest_framework.response import Response
@@ -26,6 +29,73 @@ from .serializers import (
     ProfilePublicSerializer, ConnectRequestSerializer, ConversationSerializer,
     MessageSerializer
 )
+
+DUMMY_PASSWORD_HASH = make_password("dummy-constant-time-salt-value-for-lynqo")
+
+
+def check_login_rate_limit(ip, username):
+    norm_user = (username or '').strip().lower()
+    ip_key = f"login_fail_ip:{ip}"
+    user_key = f"login_fail_user:{norm_user}" if norm_user else None
+    ip_fails = cache.get(ip_key, 0)
+    user_fails = cache.get(user_key, 0) if user_key else 0
+    if ip_fails >= 5 or user_fails >= 5:
+        return False
+    return True
+
+
+def record_login_failure(ip, username):
+    norm_user = (username or '').strip().lower()
+    ip_key = f"login_fail_ip:{ip}"
+    try:
+        cache.incr(ip_key)
+    except ValueError:
+        cache.set(ip_key, 1, 900)
+
+    if norm_user:
+        user_key = f"login_fail_user:{norm_user}"
+        try:
+            cache.incr(user_key)
+        except ValueError:
+            cache.set(user_key, 1, 900)
+
+
+def clear_login_failures(ip, username):
+    norm_user = (username or '').strip().lower()
+    cache.delete(f"login_fail_ip:{ip}")
+    if norm_user:
+        cache.delete(f"login_fail_user:{norm_user}")
+
+
+def check_recovery_rate_limit(ip, username):
+    ip_key = f"rec_fail_ip:{ip}"
+    norm_user = (username or '').strip().lower()
+    user_key = f"rec_fail_user:{norm_user}" if norm_user else None
+    if cache.get(ip_key, 0) >= 5 or (user_key and cache.get(user_key, 0) >= 5):
+        return False
+    return True
+
+
+def record_recovery_failure(ip, username):
+    norm_user = (username or '').strip().lower()
+    ip_key = f"rec_fail_ip:{ip}"
+    try:
+        cache.incr(ip_key)
+    except ValueError:
+        cache.set(ip_key, 1, 900)
+    if norm_user:
+        user_key = f"rec_fail_user:{norm_user}"
+        try:
+            cache.incr(user_key)
+        except ValueError:
+            cache.set(user_key, 1, 900)
+
+
+def clear_recovery_failures(ip, username):
+    norm_user = (username or '').strip().lower()
+    cache.delete(f"rec_fail_ip:{ip}")
+    if norm_user:
+        cache.delete(f"rec_fail_user:{norm_user}")
 
 
 def set_session_cookie(response, token):
@@ -54,15 +124,85 @@ def generate_recovery_code(profile_id):
     Format: REC-<suffix>-<8 alphanumeric chars>
     Allows O(1) indexed lookup by suffix + cryptographic hash check.
     """
-    suffix = profile_id.split('-')[1]
+    suffix = profile_id.split('-')[1] if '-' in profile_id else profile_id[:5].upper()
     alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
     code_part = "".join(secrets.choice(alphabet) for _ in range(8))
     return f"REC-{suffix}-{code_part}"
 
 
 # ============================================================================
-# PHASE 2 — PASSWORDLESS PROFILE SYSTEM VIEWS
+# PHASE 2 — AUTHENTICATION & MULTI-DEVICE SESSION SYSTEM VIEWS
 # ============================================================================
+
+class LoginView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        username = (request.data.get('username') or '').strip()
+        password = request.data.get('password') or ''
+        ip = request.META.get('REMOTE_ADDR') or 'unknown'
+
+        if not username or not password:
+            return Response(
+                {'success': False, 'message': 'Username and password are required.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if not check_login_rate_limit(ip, username):
+            return Response(
+                {'success': False, 'message': 'Too many failed login attempts. Please try again in 15 minutes or recover your account.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
+
+        user = User.objects.filter(
+            models.Q(username__iexact=username) | models.Q(profile__profile_id__iexact=username)
+        ).select_related('profile').first()
+
+        if not user or not user.has_usable_password():
+            check_password(password, DUMMY_PASSWORD_HASH)
+            record_login_failure(ip, username)
+            return Response(
+                {'success': False, 'message': 'Invalid username or password.'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        if not check_password(password, user.password):
+            record_login_failure(ip, username)
+            return Response(
+                {'success': False, 'message': 'Invalid username or password.'},
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+        if user.is_banned:
+            return Response(
+                {'success': False, 'message': 'Account is suspended.'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        clear_login_failures(ip, username)
+
+        profile = getattr(user, 'profile', None)
+        if not profile:
+            profile_id = Profile.generate_unique_profile_id()
+            profile = Profile.objects.create(
+                user=user,
+                profile_id=profile_id,
+                display_name=user.full_name or user.username
+            )
+
+        # Multi-device login: creates an independent session for this device
+        session = ProfileSession.create_session(user, request)
+
+        response_data = {
+            'success': True,
+            'message': 'Login successful.',
+            'token': session.token,
+            'profile': ProfileDetailSerializer(profile).data,
+        }
+        response = Response(response_data, status=status.HTTP_200_OK)
+        set_session_cookie(response, session.token)
+        return response
+
 
 class ProfileCreateView(APIView):
     permission_classes = [permissions.AllowAny]
@@ -72,15 +212,42 @@ class ProfileCreateView(APIView):
         serializer = ProfileCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         display_name = serializer.validated_data['display_name']
+        custom_username = (serializer.validated_data.get('username') or '').strip()
+        password = serializer.validated_data.get('password')
         profile_picture = serializer.validated_data.get('profile_picture')
+
+        if custom_username:
+            if len(custom_username) < 3:
+                return Response(
+                    {'success': False, 'message': 'Username must be at least 3 characters long.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            if User.objects.filter(
+                models.Q(username__iexact=custom_username) | models.Q(profile__profile_id__iexact=custom_username)
+            ).exists():
+                return Response(
+                    {'success': False, 'message': 'Username is already taken.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        if password and len(password) < 4:
+            return Response(
+                {'success': False, 'message': 'Password must be at least 4 characters long.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         with transaction.atomic():
             profile_id = Profile.generate_unique_profile_id()
+            username = custom_username if custom_username else profile_id
+
             user = User.objects.create(
-                username=profile_id,
+                username=username,
                 full_name=display_name
             )
-            user.set_unusable_password()
+            if password:
+                user.set_password(password)
+            else:
+                user.set_unusable_password()
             user.save()
 
             recovery_code = generate_recovery_code(profile_id)
@@ -113,50 +280,88 @@ class ProfileRecoverView(APIView):
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
+        ip = request.META.get('REMOTE_ADDR') or 'unknown'
+        username = (request.data.get('username') or '').strip()
         raw_code = (request.data.get('recovery_code') or '').strip().upper()
+        new_password = request.data.get('new_password') or request.data.get('password')
+
         if not raw_code:
             return Response(
                 {'success': False, 'message': 'Recovery code is required.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Expected format: REC-<suffix>-<part>
-        parts = raw_code.split('-')
-        if len(parts) != 3 or parts[0] != 'REC':
+        if not check_recovery_rate_limit(ip, username):
             return Response(
-                {'success': False, 'message': 'Invalid recovery code format. Expected format: REC-XXXXX-XXXXXXXX'},
-                status=status.HTTP_400_BAD_REQUEST
+                {'success': False, 'message': 'Too many recovery attempts. Please try again in 15 minutes.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS
             )
 
-        suffix = parts[1]
-        expected_profile_id = f"LYNQ-{suffix}"
+        profile = None
+        user = None
 
-        try:
-            profile = Profile.objects.select_related('user').get(profile_id=expected_profile_id)
-        except Profile.DoesNotExist:
+        if username:
+            user = User.objects.filter(
+                models.Q(username__iexact=username) | models.Q(profile__profile_id__iexact=username)
+            ).select_related('profile').first()
+            if user:
+                profile = getattr(user, 'profile', None)
+
+        if not profile and '-' in raw_code:
+            parts = raw_code.split('-')
+            if len(parts) >= 2 and parts[0] == 'REC':
+                suffix = parts[1]
+                expected_profile_id = f"LYNQ-{suffix}"
+                profile = Profile.objects.select_related('user').filter(profile_id=expected_profile_id).first()
+                if profile:
+                    user = profile.user
+
+        if not profile or not user:
+            check_password('dummy', DUMMY_PASSWORD_HASH)
+            record_recovery_failure(ip, username)
             return Response(
-                {'success': False, 'message': 'Invalid recovery code.'},
+                {'success': False, 'message': 'Invalid recovery credentials.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         if not profile.recovery_code_hash or not check_password(raw_code, profile.recovery_code_hash):
+            record_recovery_failure(ip, username)
             return Response(
-                {'success': False, 'message': 'Invalid recovery code.'},
+                {'success': False, 'message': 'Invalid recovery credentials.'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        if new_password and len(new_password) < 4:
+            return Response(
+                {'success': False, 'message': 'Password must be at least 4 characters long.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        clear_recovery_failures(ip, username)
+
         with transaction.atomic():
+            if new_password:
+                user.set_password(new_password)
+                user.save()
+
+            # Revoke all old sessions after successful recovery!
+            old_sessions = ProfileSession.objects.filter(user=user, is_active=True)
+            for s in old_sessions:
+                s.is_active = False
+                s.save(update_fields=['is_active'])
+                invalidate_session_cache(s.token)
+
             # Rotate recovery code (single use!)
             new_recovery_code = generate_recovery_code(profile.profile_id)
             profile.recovery_code_hash = make_password(new_recovery_code)
             profile.recovery_code_created_at = timezone.now()
             profile.save(update_fields=['recovery_code_hash', 'recovery_code_created_at'])
 
-            session = ProfileSession.create_session(profile.user, request)
+            session = ProfileSession.create_session(user, request)
 
         response_data = {
             'success': True,
-            'message': 'Profile recovered successfully. A new recovery code has been generated.',
+            'message': 'Account recovered successfully. A new recovery code has been generated.',
             'token': session.token,
             'profile': ProfileDetailSerializer(profile).data,
             'new_recovery_code': new_recovery_code,
@@ -255,6 +460,40 @@ class ProfileLogoutView(APIView):
         response = Response({'success': True, 'message': 'Logged out successfully.'})
         clear_session_cookie(response)
         return response
+
+
+class ProfileLogoutAllView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        sessions = ProfileSession.objects.filter(user=request.user, is_active=True)
+        for s in sessions:
+            s.is_active = False
+            s.save(update_fields=['is_active'])
+            invalidate_session_cache(s.token)
+
+        response = Response({'success': True, 'message': 'Logged out from all devices successfully.'})
+        clear_session_cookie(response)
+        return response
+
+
+class ActiveSessionsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        current_token = getattr(getattr(request, 'profile_session', None), 'token', None)
+        sessions = ProfileSession.objects.filter(user=request.user, is_active=True).order_by('-last_seen')[:15]
+        data = []
+        for s in sessions:
+            data.append({
+                'id': s.id,
+                'user_agent': s.user_agent,
+                'ip_address': s.ip_address,
+                'created_at': s.created_at,
+                'last_seen': s.last_seen,
+                'is_current': s.token == current_token,
+            })
+        return Response({'success': True, 'sessions': data})
 
 
 # ============================================================================
@@ -737,8 +976,26 @@ class MessageListView(APIView):
         limit = min(int(request.query_params.get('limit', 50)), 100)
         before_id = request.query_params.get('before_id')
         since_id = request.query_params.get('since_id')
+        around_id = request.query_params.get('around_id')
 
-        qs = Message.objects.filter(conversation=conv).exclude(deleted_for=request.user).select_related('sender__profile', 'conversation')
+        qs = Message.objects.filter(conversation=conv).exclude(deleted_for=request.user).select_related(
+            'sender__profile', 'conversation', 'reply_to', 'reply_to__sender__profile'
+        ).prefetch_related('reply_to__deleted_for')
+
+        if around_id:
+            try:
+                target_id = int(around_id)
+                half = limit // 2
+                before_qs = list(qs.filter(id__lte=target_id).order_by('-id')[:half + 1])
+                after_qs = list(qs.filter(id__gt=target_id).order_by('id')[:half])
+                combined = sorted(before_qs + after_qs, key=lambda m: (m.created_at, m.id))
+                return Response({
+                    'success': True,
+                    'messages': MessageSerializer(combined, many=True, context={'request': request}).data,
+                    'has_more': False,
+                })
+            except (ValueError, TypeError):
+                pass
 
         if before_id:
             qs = qs.filter(id__lt=int(before_id))
@@ -770,7 +1027,7 @@ class MessageListView(APIView):
 
         return Response({
             'success': True,
-            'messages': MessageSerializer(messages, many=True).data,
+            'messages': MessageSerializer(messages, many=True, context={'request': request}).data,
             'has_more': has_more,
         })
 
@@ -794,13 +1051,29 @@ class SendMessageView(APIView):
 
         content = (request.data.get('content') or '').strip()
         client_msg_id = request.data.get('client_message_id')
+        reply_to_id = request.data.get('reply_to_id') or request.data.get('reply_to')
 
         if not content:
             return Response({'success': False, 'message': 'Message content cannot be empty.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        reply_to_msg = None
+        if reply_to_id:
+            try:
+                reply_to_msg = Message.objects.select_related('sender', 'sender__profile').get(
+                    id=reply_to_id,
+                    conversation=conv
+                )
+            except (Message.DoesNotExist, ValueError):
+                return Response(
+                    {'success': False, 'message': 'Replied message not found in this conversation.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         # Deduplication
         if client_msg_id:
-            existing = Message.objects.filter(
+            existing = Message.objects.select_related(
+                'sender', 'sender__profile', 'reply_to', 'reply_to__sender', 'reply_to__sender__profile'
+            ).filter(
                 conversation=conv,
                 sender=request.user,
                 client_message_id=client_msg_id
@@ -808,7 +1081,7 @@ class SendMessageView(APIView):
             if existing:
                 return Response({
                     'success': True,
-                    'message': MessageSerializer(existing).data,
+                    'message': MessageSerializer(existing, context={'request': request}).data,
                     'deduplicated': True,
                 })
 
@@ -818,12 +1091,13 @@ class SendMessageView(APIView):
                 sender=request.user,
                 content=content,
                 client_message_id=client_msg_id,
+                reply_to=reply_to_msg,
                 status='sent'
             )
             conv.updated_at = msg.created_at
             conv.save(update_fields=['updated_at'])
 
-        msg_data = MessageSerializer(msg).data
+        msg_data = MessageSerializer(msg, context={'request': request}).data
 
         # Broadcast via WebSocket
         channel_layer = get_channel_layer()
@@ -837,6 +1111,21 @@ class SendMessageView(APIView):
             )
             async_to_sync(channel_layer.group_send)(
                 f"user_{other_user.id}",
+                {
+                    'type': 'broadcast_new_message',
+                    'message': msg_data,
+                }
+            )
+            async_to_sync(channel_layer.group_send)(
+                f"user_{other_user.id}",
+                {
+                    'type': 'broadcast_conversation_update',
+                    'conversation_id': conv.id,
+                    'message': msg_data,
+                }
+            )
+            async_to_sync(channel_layer.group_send)(
+                f"user_{request.user.id}",
                 {
                     'type': 'broadcast_conversation_update',
                     'conversation_id': conv.id,
@@ -893,15 +1182,16 @@ class MessageEditView(APIView):
         msg_data = MessageSerializer(msg, context={'request': request}).data
 
         # Broadcast update over WebSocket
+        other_user = conv.get_other_participant(request.user)
         channel_layer = get_channel_layer()
         if channel_layer:
-            async_to_sync(channel_layer.group_send)(
-                f"conv_{conv.id}",
-                {
-                    'type': 'broadcast_message_edited',
-                    'message': msg_data,
-                }
-            )
+            event = {
+                'type': 'broadcast_message_edited',
+                'message': msg_data,
+            }
+            async_to_sync(channel_layer.group_send)(f"conv_{conv.id}", event)
+            if other_user:
+                async_to_sync(channel_layer.group_send)(f"user_{other_user.id}", event)
 
         return Response({
             'success': True,
@@ -958,17 +1248,18 @@ class MessageDeleteView(APIView):
 
             msg.save(update_fields=['is_deleted', 'content', 'audio_storage_id', 'audio_file', 'updated_at'])
 
+            other_user = conv.get_other_participant(request.user)
             channel_layer = get_channel_layer()
             if channel_layer:
-                async_to_sync(channel_layer.group_send)(
-                    f"conv_{conv.id}",
-                    {
-                        'type': 'broadcast_message_deleted',
-                        'message_id': msg.id,
-                        'conversation_id': conv.id,
-                        'delete_type': 'everyone',
-                    }
-                )
+                event = {
+                    'type': 'broadcast_message_deleted',
+                    'message_id': msg.id,
+                    'conversation_id': conv.id,
+                    'delete_type': 'everyone',
+                }
+                async_to_sync(channel_layer.group_send)(f"conv_{conv.id}", event)
+                if other_user:
+                    async_to_sync(channel_layer.group_send)(f"user_{other_user.id}", event)
 
             return Response({
                 'success': True,
@@ -1091,6 +1382,20 @@ class VoiceMessageUploadView(APIView):
         storage_id = None
         upload_success = False
 
+        reply_to_id = request.data.get('reply_to_id') or request.data.get('reply_to')
+        reply_to_msg = None
+        if reply_to_id:
+            try:
+                reply_to_msg = Message.objects.select_related('sender', 'sender__profile').get(
+                    id=reply_to_id,
+                    conversation=conv
+                )
+            except (Message.DoesNotExist, ValueError):
+                return Response(
+                    {'success': False, 'message': 'Replied message not found in this conversation.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
         try:
             # If Cloudinary is configured, upload with resource_type='video' (Cloudinary's audio/video format)
             if c_cloud and c_key and c_secret:
@@ -1117,6 +1422,7 @@ class VoiceMessageUploadView(APIView):
                     conversation=conv,
                     sender=request.user,
                     client_message_id=client_msg_id,
+                    reply_to=reply_to_msg,
                     message_type='voice',
                     duration_seconds=duration_sec,
                     file_size=audio_file.size,
@@ -1150,6 +1456,21 @@ class VoiceMessageUploadView(APIView):
                     )
                     async_to_sync(channel_layer.group_send)(
                         f"user_{other_user.id}",
+                        {
+                            'type': 'broadcast_new_message',
+                            'message': msg_data,
+                        }
+                    )
+                    async_to_sync(channel_layer.group_send)(
+                        f"user_{other_user.id}",
+                        {
+                            'type': 'broadcast_conversation_update',
+                            'conversation_id': conv.id,
+                            'message': msg_data,
+                        }
+                    )
+                    async_to_sync(channel_layer.group_send)(
+                        f"user_{request.user.id}",
                         {
                             'type': 'broadcast_conversation_update',
                             'conversation_id': conv.id,
@@ -1200,8 +1521,21 @@ class VoiceMessageAudioView(APIView):
         c_key = getattr(settings, 'CLOUDINARY_API_KEY', None)
         c_secret = getattr(settings, 'CLOUDINARY_API_SECRET', None)
 
-        ext = msg.audio_format or 'webm'
-        content_type = f"audio/{ext}"
+        ext = (msg.audio_format or '').lower()
+        if not ext and msg.audio_file:
+            ext = os.path.splitext(msg.audio_file.name)[1].lstrip('.').lower()
+        ext = ext or 'webm'
+
+        MIME_MAP = {
+            'webm': 'audio/webm',
+            'ogg': 'audio/ogg',
+            'wav': 'audio/wav',
+            'mp4': 'audio/mp4',
+            'm4a': 'audio/mp4',
+            'aac': 'audio/aac',
+            'mp3': 'audio/mpeg',
+        }
+        content_type = MIME_MAP.get(ext, f"audio/{ext}")
 
         storage_id = msg.audio_storage_id or (msg.audio_file.name if msg.audio_file else None)
         is_cloudinary = c_cloud and c_key and c_secret and storage_id and not storage_id.startswith('voice_messages/')
@@ -1230,13 +1564,335 @@ class VoiceMessageAudioView(APIView):
             except Exception as cl_err:
                 logger.error("Cloudinary signed URL error: %s", cl_err)
 
+        if not msg.audio_file:
+            return Response({'success': False, 'message': 'Audio file not found or inaccessible.'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            file_path = msg.audio_file.path
+        except (AttributeError, NotImplementedError):
+            file_path = None
+
+        filename = os.path.basename(msg.audio_file.name or f"voice_{msg.id}.{ext}")
+
+        # Handle Range requests for WebKit/Safari and smooth audio playback/seeking
+        range_header = request.headers.get('Range') or request.META.get('HTTP_RANGE', '')
+        if file_path and os.path.exists(file_path):
+            file_size = os.path.getsize(file_path)
+            if range_header and range_header.startswith('bytes='):
+                try:
+                    range_spec = range_header.replace('bytes=', '').strip()
+                    parts = range_spec.split('-')
+                    start = int(parts[0]) if parts[0] else 0
+                    end = int(parts[1]) if len(parts) > 1 and parts[1] else file_size - 1
+                    end = min(end, file_size - 1)
+                    if start <= end and start < file_size:
+                        length = end - start + 1
+                        with open(file_path, 'rb') as f:
+                            f.seek(start)
+                            data = f.read(length)
+                        resp = HttpResponse(data, status=206, content_type=content_type)
+                        resp['Content-Range'] = f"bytes {start}-{end}/{file_size}"
+                        resp['Accept-Ranges'] = 'bytes'
+                        resp['Content-Length'] = str(length)
+                        resp['Content-Disposition'] = f'inline; filename="{filename}"'
+                        return resp
+                except Exception as range_err:
+                    logger.warning("Error parsing Range header: %s", range_err)
+
+            try:
+                file_handle = open(file_path, 'rb')
+                response = FileResponse(file_handle, content_type=content_type)
+                response['Accept-Ranges'] = 'bytes'
+                response['Content-Length'] = str(file_size)
+                response['Content-Disposition'] = f'inline; filename="{filename}"'
+                return response
+            except Exception as file_err:
+                logger.error("Local audio file open error: %s", file_err)
+                return Response({'success': False, 'message': 'Audio file not found or inaccessible.'}, status=status.HTTP_404_NOT_FOUND)
+
         try:
             file_handle = msg.audio_file.open('rb')
             response = FileResponse(file_handle, content_type=content_type)
-            filename = os.path.basename(msg.audio_file.name or f"voice_{msg.id}.{ext}")
+            response['Accept-Ranges'] = 'bytes'
             response['Content-Disposition'] = f'inline; filename="{filename}"'
             return response
         except Exception as file_err:
             logger.error("Local audio file open error: %s", file_err)
             return Response({'success': False, 'message': 'Audio file not found or inaccessible.'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class ImageMessageUploadView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request, conversation_id):
+        try:
+            conv = Conversation.objects.select_related('participant_1', 'participant_2').get(id=conversation_id)
+        except Conversation.DoesNotExist:
+            return Response({'success': False, 'message': 'Conversation not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if conv.participant_1_id != request.user.id and conv.participant_2_id != request.user.id:
+            return Response({'success': False, 'message': 'Unauthorized.'}, status=status.HTTP_403_FORBIDDEN)
+
+        other_user = conv.get_other_participant(request.user)
+        if getattr(request.user, 'is_banned', False) or getattr(other_user, 'is_banned', False):
+            return Response({'success': False, 'message': 'Account restricted.'}, status=status.HTTP_403_FORBIDDEN)
+
+        image_file = request.FILES.get('image') or request.FILES.get('file')
+        if not image_file:
+            return Response({'success': False, 'message': 'Image file is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 10 MB maximum file size limit
+        if image_file.size > 10 * 1024 * 1024:
+            return Response({'success': False, 'message': 'Image file exceeds 10MB limit.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        client_msg_id = request.data.get('client_message_id')
+        if client_msg_id:
+            existing = Message.objects.filter(
+                conversation=conv,
+                sender=request.user,
+                client_message_id=client_msg_id
+            ).first()
+            if existing:
+                return Response({
+                    'success': True,
+                    'message': MessageSerializer(existing, context={'request': request}).data,
+                    'deduplicated': True,
+                })
+
+        try:
+            image_file.seek(0)
+            img = Image.open(image_file)
+            img.verify()
+            image_file.seek(0)
+            img = Image.open(image_file)
+        except Exception:
+            return Response({'success': False, 'message': 'Invalid or unreadable image file.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        orig_width, orig_height = img.size
+        orig_format = (img.format or 'JPEG').upper()
+        if orig_format not in ('JPEG', 'PNG', 'WEBP'):
+            orig_format = 'JPEG'
+
+        try:
+            from PIL import ImageOps
+            img = ImageOps.exif_transpose(img)
+            orig_width, orig_height = img.size
+        except Exception:
+            pass
+
+        # Compress/downscale original if larger than 1920x1920
+        max_dim = 1920
+        main_img = img.copy()
+        if max(orig_width, orig_height) > max_dim:
+            main_img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
+            main_width, main_height = main_img.size
+        else:
+            main_width, main_height = orig_width, orig_height
+
+        main_buf = io.BytesIO()
+        save_format = 'JPEG' if orig_format == 'JPEG' else ('PNG' if orig_format == 'PNG' else 'WEBP')
+        if save_format == 'JPEG' and main_img.mode in ('RGBA', 'P'):
+            main_img = main_img.convert('RGB')
+        main_img.save(main_buf, format=save_format, quality=85, optimize=True)
+        main_bytes = main_buf.getvalue()
+
+        # Generate thumbnail (max 360x360)
+        thumb_img = img.copy()
+        thumb_img.thumbnail((360, 360), Image.Resampling.LANCZOS)
+        thumb_buf = io.BytesIO()
+        if thumb_img.mode in ('RGBA', 'P'):
+            thumb_img = thumb_img.convert('RGB')
+        thumb_img.save(thumb_buf, format='JPEG', quality=80, optimize=True)
+        thumb_bytes = thumb_buf.getvalue()
+
+        ext = 'jpg' if save_format == 'JPEG' else ('png' if save_format == 'PNG' else 'webp')
+        safe_base = f"img_{conv.id}_{secrets.token_hex(16)}"
+        safe_filename = f"{safe_base}.{ext}"
+        thumb_filename = f"{safe_base}_thumb.jpg"
+
+        c_cloud = getattr(settings, 'CLOUDINARY_CLOUD_NAME', None)
+        c_key = getattr(settings, 'CLOUDINARY_API_KEY', None)
+        c_secret = getattr(settings, 'CLOUDINARY_API_SECRET', None)
+
+        image_storage_id = None
+        thumb_storage_id = None
+        upload_success = False
+
+        if c_cloud and c_key and c_secret:
+            try:
+                import cloudinary.uploader
+                up_main = cloudinary.uploader.upload(
+                    main_bytes,
+                    resource_type='image',
+                    folder=f"lynqo_chat/{conv.id}",
+                    public_id=safe_base,
+                    overwrite=False,
+                )
+                image_storage_id = up_main.get('public_id')
+
+                up_thumb = cloudinary.uploader.upload(
+                    thumb_bytes,
+                    resource_type='image',
+                    folder=f"lynqo_chat/{conv.id}/thumbs",
+                    public_id=f"{safe_base}_thumb",
+                    overwrite=False,
+                )
+                thumb_storage_id = up_thumb.get('public_id')
+                upload_success = True
+            except Exception as cl_err:
+                logger.error("Cloudinary chat image upload failed, falling back to local file storage: %s", cl_err)
+                image_storage_id = None
+                thumb_storage_id = None
+                upload_success = False
+
+        reply_to_id = request.data.get('reply_to_id') or request.data.get('reply_to')
+        reply_to_msg = None
+        if reply_to_id:
+            try:
+                reply_to_msg = Message.objects.select_related('sender', 'sender__profile').get(
+                    id=reply_to_id,
+                    conversation=conv
+                )
+            except (Message.DoesNotExist, ValueError):
+                return Response(
+                    {'success': False, 'message': 'Replied message not found in this conversation.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        from django.core.files.base import ContentFile
+
+        with transaction.atomic():
+            msg = Message(
+                conversation=conv,
+                sender=request.user,
+                client_message_id=client_msg_id,
+                reply_to=reply_to_msg,
+                message_type='image',
+                image_width=main_width,
+                image_height=main_height,
+                file_size=len(main_bytes),
+                status='sent'
+            )
+            if upload_success and image_storage_id:
+                msg.image_storage_id = image_storage_id
+                msg.image_thumbnail_id = thumb_storage_id
+                msg.image_file.name = image_storage_id
+                if thumb_storage_id:
+                    msg.image_thumbnail.name = thumb_storage_id
+            else:
+                msg.image_file.save(safe_filename, ContentFile(main_bytes), save=False)
+                msg.image_thumbnail.save(thumb_filename, ContentFile(thumb_bytes), save=False)
+                msg.image_storage_id = msg.image_file.name
+                msg.image_thumbnail_id = msg.image_thumbnail.name
+
+            msg.save()
+            conv.updated_at = msg.created_at
+            conv.save(update_fields=['updated_at'])
+
+        msg_data = MessageSerializer(msg, context={'request': request}).data
+
+        # WebSocket Broadcast to conversation and both users
+        try:
+            channel_layer = get_channel_layer()
+            if channel_layer:
+                async_to_sync(channel_layer.group_send)(
+                    f"conv_{conv.id}",
+                    {
+                        'type': 'broadcast_new_message',
+                        'message': msg_data,
+                    }
+                )
+                async_to_sync(channel_layer.group_send)(
+                    f"user_{other_user.id}",
+                    {
+                        'type': 'broadcast_new_message',
+                        'message': msg_data,
+                    }
+                )
+                async_to_sync(channel_layer.group_send)(
+                    f"user_{other_user.id}",
+                    {
+                        'type': 'broadcast_conversation_update',
+                        'conversation_id': conv.id,
+                        'message': msg_data,
+                    }
+                )
+                async_to_sync(channel_layer.group_send)(
+                    f"user_{request.user.id}",
+                    {
+                        'type': 'broadcast_conversation_update',
+                        'conversation_id': conv.id,
+                        'message': msg_data,
+                    }
+                )
+        except Exception as ws_err:
+            logger.warning("WebSocket broadcast skipped or failed: %s", ws_err)
+
+        return Response({
+            'success': True,
+            'message': msg_data,
+        }, status=status.HTTP_201_CREATED)
+
+
+class ImageMessageMediaView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, conversation_id, message_id):
+        try:
+            conv = Conversation.objects.get(id=conversation_id)
+        except Conversation.DoesNotExist:
+            return Response({'success': False, 'message': 'Conversation not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if conv.participant_1_id != request.user.id and conv.participant_2_id != request.user.id:
+            return Response({'success': False, 'message': 'Unauthorized.'}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            msg = Message.objects.get(id=message_id, conversation=conv, message_type='image')
+        except Message.DoesNotExist:
+            return Response({'success': False, 'message': 'Image not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if msg.is_deleted:
+            return Response({'success': False, 'message': 'Image not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        is_thumb = request.query_params.get('thumb') in ('1', 'true', 'yes')
+
+        c_cloud = getattr(settings, 'CLOUDINARY_CLOUD_NAME', None)
+        storage_id = msg.image_thumbnail_id if (is_thumb and msg.image_thumbnail_id) else msg.image_storage_id
+
+        if c_cloud and storage_id and not storage_id.startswith('/') and not os.path.exists(str(storage_id)):
+            try:
+                import cloudinary.utils
+                transformation = {'quality': 'auto', 'fetch_format': 'auto'}
+                if is_thumb:
+                    transformation.update({'width': 360, 'crop': 'limit'})
+                c_url, _ = cloudinary.utils.cloudinary_url(
+                    storage_id,
+                    resource_type='image',
+                    type='upload',
+                    secure=True,
+                    transformation=transformation
+                )
+                return HttpResponseRedirect(c_url)
+            except Exception as err:
+                logger.warning("Cloudinary URL generation error: %s", err)
+
+        target_field = msg.image_thumbnail if (is_thumb and msg.image_thumbnail) else msg.image_file
+        if not target_field:
+            return Response({'success': False, 'message': 'Image file missing.'}, status=status.HTTP_404_NOT_FOUND)
+
+        try:
+            file_handle = target_field.open('rb')
+            ext = os.path.splitext(target_field.name)[1].lower()
+            mime = 'image/jpeg'
+            if ext == '.png':
+                mime = 'image/png'
+            elif ext == '.webp':
+                mime = 'image/webp'
+            resp = FileResponse(file_handle, content_type=mime)
+            resp['Cache-Control'] = 'private, max-age=86400'
+            return resp
+        except Exception as e:
+            logger.error("Failed to read image file from disk: %s", e)
+            return Response({'success': False, 'message': 'Failed to read image file.'}, status=status.HTTP_404_NOT_FOUND)
 

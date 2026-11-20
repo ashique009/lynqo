@@ -6,7 +6,7 @@
 @theme {
   --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --font-display: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  
+
   --color-light-bg: #FCEEF3;
   --color-light-card: #ffffff;
   --color-light-border: #F4C0D1;
@@ -167,4 +167,24 @@ html.dark * {
 }
 .pr-safe {
   padding-right: max(0.5rem, env(safe-area-inset-right, 0px));
+}
+
+/* Reply Highlight Flash Animation */
+@keyframes replyHighlightPulse {
+  0% {
+    box-shadow: 0 0 0 3px rgba(236, 72, 153, 0.7), 0 0 20px rgba(236, 72, 153, 0.4);
+    transform: scale(1.02);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(236, 72, 153, 0.9), 0 0 30px rgba(236, 72, 153, 0.6);
+    transform: scale(1.03);
+  }
+  100% {
+    box-shadow: none;
+    transform: scale(1);
+  }
+}
+
+.reply-highlight {
+  animation: replyHighlightPulse 1.4s ease-out;
 }

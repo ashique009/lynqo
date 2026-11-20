@@ -7,6 +7,36 @@ from django.core.cache import cache
 from .models import ProfileSession, Conversation, Message, ConnectRequest, User
 
 
+def add_user_channel(user_id, channel_name):
+    key = f"ws_user_channels:{user_id}"
+    channels = cache.get(key)
+    if not isinstance(channels, set):
+        channels = set()
+    channels.add(channel_name)
+    cache.set(key, channels, timeout=3600)
+    return len(channels)
+
+
+def remove_user_channel(user_id, channel_name):
+    key = f"ws_user_channels:{user_id}"
+    channels = cache.get(key)
+    if not isinstance(channels, set):
+        return 0
+    channels.discard(channel_name)
+    if channels:
+        cache.set(key, channels, timeout=3600)
+        return len(channels)
+    else:
+        cache.delete(key)
+        return 0
+
+
+def is_user_online(user_id):
+    key = f"ws_user_channels:{user_id}"
+    channels = cache.get(key)
+    return bool(isinstance(channels, set) and len(channels) > 0)
+
+
 class ChatConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
         self.joined_groups = set()
@@ -20,15 +50,22 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         self.joined_groups.add(self.user_group)
         await self.accept()
 
-        # Update presence and broadcast online status to contacts
-        await self.set_online_status(True)
-        await self.broadcast_presence(True)
+        # Track active connection count per user
+        active_count = await database_sync_to_async(add_user_channel)(self.user.id, self.channel_name)
+        if active_count == 1:
+            await self.set_online_status(True)
+            await self.broadcast_presence(True)
+
+        # Send current online status of all contacts to this newly connected user
+        await self.send_contacts_presence()
 
     async def disconnect(self, close_code):
         try:
             if hasattr(self, 'user') and self.user:
-                await self.set_online_status(False)
-                await self.broadcast_presence(False)
+                active_count = await database_sync_to_async(remove_user_channel)(self.user.id, self.channel_name)
+                if active_count <= 0:
+                    await self.set_online_status(False)
+                    await self.broadcast_presence(False)
                 if hasattr(self, 'joined_groups'):
                     for group_name in list(self.joined_groups):
                         await self.channel_layer.group_discard(group_name, self.channel_name)
@@ -40,6 +77,12 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         msg_type = content.get('type')
 
         if msg_type == 'ping':
+            if hasattr(self, 'user') and self.user:
+                key = f"ws_user_channels:{self.user.id}"
+                try:
+                    cache.touch(key, 3600)
+                except Exception:
+                    pass
             await self.send_json({'type': 'pong'})
             return
 
@@ -74,13 +117,14 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         conv_id = data.get('conversation_id')
         text = (data.get('content') or '').strip()
         client_msg_id = data.get('client_message_id')
+        reply_to_id = data.get('reply_to_id') or data.get('reply_to')
 
         if not conv_id or not text:
             await self.send_json({'type': 'error', 'message': 'Missing conversation_id or content'})
             return
 
         msg_data, recipient_id, is_new, error_reason = await self.process_and_save_chat_message(
-            conv_id, text, client_msg_id
+            conv_id, text, client_msg_id, reply_to_id
         )
         if error_reason:
             await self.send_json({'type': 'error', 'message': error_reason})
@@ -92,11 +136,19 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             {
                 'type': 'broadcast_new_message',
                 'message': msg_data,
+                'sender_channel': self.channel_name,
             }
         )
 
-        # Also push notification event to recipient's personal group
+        # Direct broadcast to recipient's personal group (guarantees real-time delivery even before conv group join)
         if recipient_id:
+            await self.channel_layer.group_send(
+                f"user_{recipient_id}",
+                {
+                    'type': 'broadcast_new_message',
+                    'message': msg_data,
+                }
+            )
             await self.channel_layer.group_send(
                 f"user_{recipient_id}",
                 {
@@ -105,6 +157,16 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                     'message': msg_data,
                 }
             )
+
+        # Multi-device broadcast to sender's other open tabs/sessions
+        await self.channel_layer.group_send(
+            f"user_{self.user.id}",
+            {
+                'type': 'broadcast_new_message',
+                'message': msg_data,
+                'sender_channel': self.channel_name,
+            }
+        )
 
         # Send ACK to sender
         await self.send_json({
@@ -120,49 +182,52 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         is_typing = bool(data.get('is_typing'))
         if await self.is_participant(conv_id):
             profile_id = await self.get_profile_id()
-            await self.channel_layer.group_send(
-                f"conv_{conv_id}",
-                {
-                    'type': 'broadcast_typing',
-                    'conversation_id': conv_id,
-                    'profile_id': profile_id,
-                    'is_typing': is_typing,
-                    'sender_channel': self.channel_name,
-                }
-            )
+            other_user_id = await self.get_other_participant_id(conv_id)
+            event = {
+                'type': 'broadcast_typing',
+                'conversation_id': conv_id,
+                'profile_id': profile_id,
+                'is_typing': is_typing,
+                'sender_channel': self.channel_name,
+            }
+            await self.channel_layer.group_send(f"conv_{conv_id}", event)
+            if other_user_id:
+                await self.channel_layer.group_send(f"user_{other_user_id}", event)
 
     async def handle_mark_delivered(self, data):
         conv_id = data.get('conversation_id')
         raw_ids = data.get('message_ids') or ([data.get('message_id')] if data.get('message_id') else [])
         if await self.is_participant(conv_id) and raw_ids:
-            delivered_ids = await self.mark_messages_as_delivered(conv_id, raw_ids)
+            delivered_ids, other_user_id = await self.mark_messages_as_delivered(conv_id, raw_ids)
             if delivered_ids:
-                await self.channel_layer.group_send(
-                    f"conv_{conv_id}",
-                    {
-                        'type': 'broadcast_messages_delivered',
-                        'conversation_id': conv_id,
-                        'message_ids': delivered_ids,
-                    }
-                )
+                event = {
+                    'type': 'broadcast_messages_delivered',
+                    'conversation_id': conv_id,
+                    'message_ids': delivered_ids,
+                }
+                await self.channel_layer.group_send(f"conv_{conv_id}", event)
+                if other_user_id:
+                    await self.channel_layer.group_send(f"user_{other_user_id}", event)
 
     async def handle_mark_seen(self, data):
         conv_id = data.get('conversation_id')
         if await self.is_participant(conv_id):
-            updated_count = await self.mark_messages_as_seen(conv_id)
+            updated_count, other_user_id = await self.mark_messages_as_seen(conv_id)
             if updated_count > 0:
                 profile_id = await self.get_profile_id()
-                await self.channel_layer.group_send(
-                    f"conv_{conv_id}",
-                    {
-                        'type': 'broadcast_messages_seen',
-                        'conversation_id': conv_id,
-                        'seen_by_profile_id': profile_id,
-                    }
-                )
+                event = {
+                    'type': 'broadcast_messages_seen',
+                    'conversation_id': conv_id,
+                    'seen_by_profile_id': profile_id,
+                }
+                await self.channel_layer.group_send(f"conv_{conv_id}", event)
+                if other_user_id:
+                    await self.channel_layer.group_send(f"user_{other_user_id}", event)
 
     # Channel layer group handlers
     async def broadcast_new_message(self, event):
+        if event.get('sender_channel') == self.channel_name:
+            return
         await self.send_json({
             'type': 'new_message',
             'message': event['message'],
@@ -225,6 +290,30 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             'type': event['event_type'],
             'data': event.get('data'),
         })
+
+    async def send_contacts_presence(self):
+        contact_ids = await self.get_contact_ids()
+        for cid in contact_ids:
+            online = is_user_online(cid)
+            profile_id, last_seen_str = await self.get_user_profile_info(cid)
+            if profile_id:
+                await self.send_json({
+                    'type': 'presence_update',
+                    'profile_id': profile_id,
+                    'is_online': online,
+                    'last_seen': last_seen_str,
+                })
+
+    @database_sync_to_async
+    def get_user_profile_info(self, user_id):
+        try:
+            user = User.objects.select_related('profile').get(id=user_id)
+            profile = getattr(user, 'profile', None)
+            profile_id = profile.profile_id if profile else user.username
+            last_seen_str = user.last_seen.isoformat() if user.last_seen else None
+            return profile_id, last_seen_str
+        except User.DoesNotExist:
+            return None, None
 
     # Database helpers
     @database_sync_to_async
@@ -330,7 +419,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         return True, other_user.id, None
 
     @database_sync_to_async
-    def process_and_save_chat_message(self, conv_id, content, client_msg_id):
+    def process_and_save_chat_message(self, conv_id, content, client_msg_id, reply_to_id=None):
         """
         Unified authorization, deduplication, and persistence in a single DB transaction.
         Eliminates redundant Conversation lookups and multiple round trips.
@@ -347,9 +436,21 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         if getattr(self.user, 'is_banned', False) or getattr(other_user, 'is_banned', False):
             return None, None, False, "Account restricted."
 
+        reply_to_msg = None
+        if reply_to_id:
+            try:
+                reply_to_msg = Message.objects.select_related('sender', 'sender__profile').get(
+                    id=reply_to_id,
+                    conversation=conv
+                )
+            except Message.DoesNotExist:
+                return None, None, False, "Replied message not found in this conversation."
+
         # Deduplication
         if client_msg_id:
-            existing = Message.objects.filter(
+            existing = Message.objects.select_related(
+                'sender', 'sender__profile', 'reply_to', 'reply_to__sender', 'reply_to__sender__profile'
+            ).filter(
                 conversation=conv,
                 sender=self.user,
                 client_message_id=client_msg_id
@@ -362,6 +463,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             sender=self.user,
             content=content,
             client_message_id=client_msg_id,
+            reply_to=reply_to_msg,
             status='sent'
         )
         conv.updated_at = msg.created_at
@@ -369,13 +471,16 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         return self._format_message(msg), other_user.id, True, None
 
     @database_sync_to_async
-    def save_message(self, conv_id, content, client_msg_id):
-        msg_data, _, is_new, _ = self.process_and_save_chat_message(conv_id, content, client_msg_id)
+    def save_message(self, conv_id, content, client_msg_id, reply_to_id=None):
+        msg_data, _, is_new, _ = self.process_and_save_chat_message(conv_id, content, client_msg_id, reply_to_id)
         return msg_data, is_new
 
     @database_sync_to_async
     def mark_messages_as_delivered(self, conv_id, message_ids):
-        conv = Conversation.objects.get(id=conv_id)
+        try:
+            conv = Conversation.objects.get(id=conv_id)
+        except (Conversation.DoesNotExist, ValueError):
+            return [], None
         qs = Message.objects.filter(
             conversation=conv,
             id__in=message_ids,
@@ -384,18 +489,35 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         delivered_ids = list(qs.values_list('id', flat=True))
         if delivered_ids:
             qs.update(status='delivered')
-        return delivered_ids
+        other = conv.get_other_participant(self.user)
+        return delivered_ids, getattr(other, 'id', None)
 
     @database_sync_to_async
     def mark_messages_as_seen(self, conv_id):
-        conv = Conversation.objects.get(id=conv_id)
-        return Message.objects.filter(
+        try:
+            conv = Conversation.objects.get(id=conv_id)
+        except (Conversation.DoesNotExist, ValueError):
+            return 0, None
+        count = Message.objects.filter(
             conversation=conv,
             status__in=['sent', 'delivered']
         ).exclude(sender=self.user).update(status='seen', is_read=True)
+        other = conv.get_other_participant(self.user)
+        return count, getattr(other, 'id', None)
+
+    @database_sync_to_async
+    def get_other_participant_id(self, conv_id):
+        try:
+            conv = Conversation.objects.get(id=conv_id)
+            other = conv.get_other_participant(self.user)
+            return getattr(other, 'id', None)
+        except (Conversation.DoesNotExist, ValueError):
+            return None
 
     def _format_message(self, msg):
         sender_profile = getattr(msg.sender, 'profile', None)
+        from .serializers import format_reply_to_details
+        reply_to_details = format_reply_to_details(getattr(msg, 'reply_to', None), user=getattr(self, 'user', None))
         return {
             'id': msg.id,
             'client_message_id': msg.client_message_id,
@@ -405,6 +527,12 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
             'content': msg.content,
             'message_type': getattr(msg, 'message_type', 'text'),
             'audio_url': f"/api/auth/conversations/{msg.conversation_id}/messages/{msg.id}/audio/" if getattr(msg, 'message_type', 'text') == 'voice' else None,
+            'image_url': f"/api/auth/conversations/{msg.conversation_id}/messages/{msg.id}/image/" if getattr(msg, 'message_type', 'text') == 'image' else None,
+            'thumbnail_url': f"/api/auth/conversations/{msg.conversation_id}/messages/{msg.id}/image/?thumb=1" if getattr(msg, 'message_type', 'text') == 'image' else None,
+            'reply_to_id': getattr(msg, 'reply_to_id', None),
+            'reply_to_details': reply_to_details,
+            'image_width': getattr(msg, 'image_width', None),
+            'image_height': getattr(msg, 'image_height', None),
             'duration_seconds': getattr(msg, 'duration_seconds', None),
             'file_size': getattr(msg, 'file_size', None),
             'audio_format': getattr(msg, 'audio_format', None),

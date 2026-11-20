@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import {
   MessageSquare, UserPlus, Users, Search, Copy, Check,
-  Sparkles, CheckCheck, Clock, UserCheck, Mic
+  Sparkles, CheckCheck, Clock, UserCheck, Mic, ImageIcon
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -308,6 +308,11 @@ export const HomeDashboard = () => {
                           <span className="inline-flex items-center gap-1.5 text-pink-400 font-medium">
                             <Mic className="w-3.5 h-3.5 shrink-0" />
                             <span>Voice message {conv.last_message.duration_seconds ? `(${conv.last_message.duration_seconds}s)` : ''}</span>
+                          </span>
+                        ) : conv.last_message.message_type === 'image' ? (
+                          <span className="inline-flex items-center gap-1.5 text-pink-400 font-medium">
+                            <ImageIcon className="w-3.5 h-3.5 shrink-0" />
+                            <span>Photo</span>
                           </span>
                         ) : (
                           conv.last_message.content || 'No messages yet'

@@ -8,7 +8,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 
 export const Settings = () => {
-  const { profile, updateProfile, regenerateRecoveryCode, logout } = useAuth();
+  const { profile, updateProfile, regenerateRecoveryCode, logout, logoutAll } = useAuth();
   const { showToast } = useToast();
   const navigate = useNavigate();
 
@@ -104,6 +104,12 @@ export const Settings = () => {
     await logout();
     navigate('/');
     showToast('Logged out of session.', 'info');
+  };
+
+  const handleLogoutAll = async () => {
+    await logoutAll();
+    navigate('/');
+    showToast('Logged out from all devices.', 'info');
   };
 
   return (
@@ -232,6 +238,7 @@ export const Settings = () => {
                 <button
                   type="button"
                   onClick={() => setShowCode(!showCode)}
+                  aria-label={showCode ? 'Hide recovery code' : 'Show recovery code'}
                   className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer"
                 >
                   {showCode ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
@@ -239,6 +246,7 @@ export const Settings = () => {
                 <button
                   type="button"
                   onClick={copyCode}
+                  aria-label="Copy recovery code"
                   className="p-2 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 transition-colors cursor-pointer"
                 >
                   {copiedCode ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
@@ -277,21 +285,32 @@ export const Settings = () => {
       </div>
 
       {/* Disconnect Session */}
-      <div className="p-6 md:p-8 rounded-3xl bg-slate-900/80 border border-slate-800 shadow-xl backdrop-blur-xl flex items-center justify-between gap-4">
+      <div className="p-6 md:p-8 rounded-3xl bg-slate-900/80 border border-slate-800 shadow-xl backdrop-blur-xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h3 className="text-base font-bold text-white">Log Out / End Session</h3>
           <p className="text-xs text-slate-400 mt-0.5">
-            Clears your local session cookie. Make sure you saved your recovery code first!
+            Log out of this device, or revoke access on all connected devices.
           </p>
         </div>
 
-        <button
-          onClick={handleLogout}
-          className="px-5 py-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
-        >
-          <LogOut className="w-4 h-4" />
-          <span>Log Out</span>
-        </button>
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
+          >
+            <LogOut className="w-4 h-4" />
+            <span>This Device</span>
+          </button>
+          <button
+            type="button"
+            onClick={handleLogoutAll}
+            className="px-4 py-2.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shrink-0"
+          >
+            <ShieldAlert className="w-4 h-4" />
+            <span>All Devices</span>
+          </button>
+        </div>
       </div>
 
       {/* Confirm Regeneration Modal */}

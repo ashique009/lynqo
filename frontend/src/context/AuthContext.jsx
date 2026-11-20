@@ -2,6 +2,7 @@ import React, { createContext, useState, useEffect, useContext } from 'react';
 import { profileService } from '../services/profileService';
 import { wsService } from '../services/websocketService';
 import { cacheInvalidate, setCacheUserScope } from '../utils/cache';
+import { clearMediaCache } from '../utils/mediaUrl';
 
 const AuthContext = createContext(null);
 
@@ -58,15 +59,39 @@ export const AuthProvider = ({ children }) => {
     localStorage.removeItem('lynqo_profile');
     setCacheUserScope(null);
     cacheInvalidate();
+    clearMediaCache();
     setToken(null);
     setProfile(null);
     wsService.disconnect();
   };
 
-  const createProfile = async (displayName, pictureFile) => {
+  const login = async (username, password) => {
     setIsLoading(true);
     try {
-      const res = await profileService.createProfile(displayName, pictureFile);
+      const res = await profileService.login(username, password);
+      if (res.success) {
+        const { token: newToken, profile: newProfile } = res;
+        cacheInvalidate();
+        setCacheUserScope(newProfile?.profile_id);
+        localStorage.setItem('lynqo_token', newToken);
+        localStorage.setItem('lynqo_profile', JSON.stringify(newProfile));
+        setToken(newToken);
+        setProfile(newProfile);
+        wsService.connect(newToken);
+        return { success: true, profile: newProfile };
+      }
+      return { success: false, message: res.message || 'Invalid username or password' };
+    } catch (err) {
+      return { success: false, message: err.message || 'Invalid username or password' };
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const createProfile = async (displayName, pictureFile, username = null, password = null) => {
+    setIsLoading(true);
+    try {
+      const res = await profileService.createProfile(displayName, pictureFile, username, password);
       if (res.success) {
         const { token: newToken, profile: newProfile, recovery_code } = res;
         cacheInvalidate();
@@ -86,10 +111,10 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const recoverProfile = async (recoveryCode) => {
+  const recoverProfile = async (recoveryCode, username = null, newPassword = null) => {
     setIsLoading(true);
     try {
-      const res = await profileService.recoverProfile(recoveryCode);
+      const res = await profileService.recoverProfile(recoveryCode, username, newPassword);
       if (res.success) {
         const { token: newToken, profile: recoveredProfile, new_recovery_code } = res;
         cacheInvalidate();
@@ -146,16 +171,28 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const logoutAll = async () => {
+    try {
+      await profileService.logoutAll();
+    } catch (err) {
+      console.warn('Logout all error:', err);
+    } finally {
+      clearAuth();
+    }
+  };
+
   const value = {
     token,
     profile,
     isAuthenticated: Boolean(token && profile),
     isLoading,
+    login,
     createProfile,
     recoverProfile,
     updateProfile,
     regenerateRecoveryCode,
     logout,
+    logoutAll,
     refreshProfile: () => (token ? fetchCurrentProfile(token) : null),
   };
 

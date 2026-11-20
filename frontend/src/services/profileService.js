@@ -1,9 +1,22 @@
 import client from '../api/client';
 
 export const profileService = {
-  async createProfile(displayName, profilePictureFile) {
+  async login(username, password) {
+    return client.post('/api/auth/login/', {
+      username: username?.trim(),
+      password: password,
+    });
+  },
+
+  async createProfile(displayName, profilePictureFile, username = null, password = null) {
     const formData = new FormData();
     formData.append('display_name', displayName);
+    if (username) {
+      formData.append('username', username.trim());
+    }
+    if (password) {
+      formData.append('password', password);
+    }
     if (profilePictureFile instanceof File) {
       formData.append('profile_picture', profilePictureFile);
     }
@@ -14,10 +27,17 @@ export const profileService = {
     });
   },
 
-  async recoverProfile(recoveryCode) {
-    return client.post('/api/auth/profile/recover/', {
-      recovery_code: recoveryCode,
-    });
+  async recoverProfile(recoveryCode, username = null, newPassword = null) {
+    const payload = {
+      recovery_code: recoveryCode?.trim()?.toUpperCase(),
+    };
+    if (username) {
+      payload.username = username.trim();
+    }
+    if (newPassword) {
+      payload.new_password = newPassword;
+    }
+    return client.post('/api/auth/profile/recover/', payload);
   },
 
   async getProfile() {
@@ -45,6 +65,14 @@ export const profileService = {
 
   async logout() {
     return client.post('/api/auth/profile/logout/');
+  },
+
+  async logoutAll() {
+    return client.post('/api/auth/profile/logout-all/');
+  },
+
+  async getSessions() {
+    return client.get('/api/auth/profile/sessions/');
   },
 };
 

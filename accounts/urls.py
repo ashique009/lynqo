@@ -1,17 +1,21 @@
 from django.urls import path
 from .views import (
-    ProfileCreateView, ProfileRecoverView, ProfileMeView,
+    LoginView, ProfileCreateView, ProfileRecoverView, ProfileMeView,
     ProfileUpdateView, ProfileRegenerateRecoveryCodeView, ProfileLogoutView,
+    ProfileLogoutAllView, ActiveSessionsView,
     ProfileSearchView, SendConnectRequestView, IncomingRequestsView,
     OutgoingRequestsView, AcceptConnectRequestView, DeclineConnectRequestView,
     CancelConnectRequestView, ConnectedProfilesView,
     ConversationListView, ConversationDetailView, MessageListView,
-    SendMessageView, VoiceMessageUploadView, VoiceMessageAudioView,
+    SendMessageView, ImageMessageUploadView, ImageMessageMediaView,
+    VoiceMessageUploadView, VoiceMessageAudioView,
     MessageEditView, MessageDeleteView
 )
 
 urlpatterns = [
-    # Profile & Passwordless Auth
+    # Profile & Password / Simple Auth
+    path('login/', LoginView.as_view(), name='auth-login'),
+    path('profile/login/', LoginView.as_view(), name='profile-login'),
     path('profile/create/', ProfileCreateView.as_view(), name='profile-create'),
     path('profile/recover/', ProfileRecoverView.as_view(), name='profile-recover'),
     path('profile/me/', ProfileMeView.as_view(), name='profile-me'),
@@ -19,6 +23,8 @@ urlpatterns = [
     path('profile/update/', ProfileUpdateView.as_view(), name='profile-update'),
     path('profile/regenerate-recovery-code/', ProfileRegenerateRecoveryCodeView.as_view(), name='profile-regenerate-code'),
     path('profile/logout/', ProfileLogoutView.as_view(), name='profile-logout'),
+    path('profile/logout-all/', ProfileLogoutAllView.as_view(), name='profile-logout-all'),
+    path('profile/sessions/', ActiveSessionsView.as_view(), name='profile-sessions'),
 
     # Profile Search & Connections
     path('profiles/search/', ProfileSearchView.as_view(), name='profile-search'),
@@ -35,6 +41,8 @@ urlpatterns = [
     path('conversations/<int:conversation_id>/', ConversationDetailView.as_view(), name='conversation-detail'),
     path('conversations/<int:conversation_id>/messages/', MessageListView.as_view(), name='conversation-messages'),
     path('conversations/<int:conversation_id>/messages/send/', SendMessageView.as_view(), name='conversation-send-message'),
+    path('conversations/<int:conversation_id>/messages/image/', ImageMessageUploadView.as_view(), name='conversation-image-upload'),
+    path('conversations/<int:conversation_id>/messages/<int:message_id>/image/', ImageMessageMediaView.as_view(), name='conversation-image-media'),
     path('conversations/<int:conversation_id>/messages/voice/', VoiceMessageUploadView.as_view(), name='conversation-voice-upload'),
     path('conversations/<int:conversation_id>/messages/<int:message_id>/audio/', VoiceMessageAudioView.as_view(), name='conversation-voice-audio'),
     path('conversations/<int:conversation_id>/messages/<int:message_id>/edit/', MessageEditView.as_view(), name='conversation-message-edit'),

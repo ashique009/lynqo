@@ -30,6 +30,8 @@ export const mergeMessages = (existingMessages = [], incomingMessages = []) => {
       client_message_id: clientMsgId,
       status: bestStatus,
       is_read: base.is_read || incoming.is_read || bestStatus === 'seen',
+      reply_to_id: incoming.reply_to_id !== undefined ? incoming.reply_to_id : (base.reply_to_id || null),
+      reply_to_details: incoming.reply_to_details || base.reply_to_details || null,
     };
   };
 
