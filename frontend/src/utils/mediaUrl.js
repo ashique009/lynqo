@@ -1,15 +1,48 @@
-import client, { API_BASE_URL } from '../api/client.js';
+import client, { API_BASE_URL, isExternalUrl } from '../api/client.js';
 
 // LRU cache for authenticated object URLs: rawUrl -> { objectUrl, lastUsed, isCustomBlob }
 const mediaBlobCache = new Map();
 const inFlightRequests = new Map();
 const MAX_CACHE_ENTRIES = 80;
 
+const storeInCache = (key, objectUrl) => {
+  if (mediaBlobCache.size >= MAX_CACHE_ENTRIES) {
+    let oldestKey = null;
+    let oldestTime = Infinity;
+    for (const [k, v] of mediaBlobCache.entries()) {
+      if (v.lastUsed < oldestTime) {
+        oldestTime = v.lastUsed;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey) {
+      const oldEntry = mediaBlobCache.get(oldestKey);
+      if (oldEntry?.objectUrl && oldEntry.objectUrl.startsWith('blob:')) {
+        try {
+          URL.revokeObjectURL(oldEntry.objectUrl);
+        } catch (e) {
+          // ignore
+        }
+      }
+      mediaBlobCache.delete(oldestKey);
+    }
+  }
+
+  mediaBlobCache.set(key, {
+    objectUrl,
+    lastUsed: Date.now(),
+    isCustomBlob: true,
+  });
+};
+
 /**
  * Resolves an authenticated media URL (image or audio) into a browser-loadable URL.
  * If rawUrl is already a local blob (optimistic upload), returns it directly.
- * Otherwise, fetches binary data using the authenticated Axios client (with Bearer token & cookies),
- * converts to an in-memory object URL, and caches it with automatic LRU cleanup.
+ * Uses a secure two-step flow for protected Cloudinary media:
+ * 1. Requests short-lived signed URL or proxy from LYNQO backend using credentials.
+ * 2. Fetches binary media directly from Cloudinary without credentials ('credentials: omit'),
+ *    completely eliminating cross-origin credential issues with Cloudinary wildcard CORS.
+ * Converts to an in-memory object URL, and caches it with automatic LRU cleanup.
  */
 export const getAuthenticatedMediaUrl = async (rawUrl) => {
   if (!rawUrl || typeof rawUrl !== 'string') return null;
@@ -31,7 +64,6 @@ export const getAuthenticatedMediaUrl = async (rawUrl) => {
     return inFlightRequests.get(rawUrl);
   }
 
-  const token = typeof localStorage !== 'undefined' ? localStorage.getItem('lynqo_token') : null;
   const baseUrl = (API_BASE_URL || '').replace(/\/+$/, '');
   const path = rawUrl.startsWith('/') ? rawUrl : `/${rawUrl}`;
   const fullUrl = rawUrl.startsWith('http://') || rawUrl.startsWith('https://')
@@ -40,54 +72,115 @@ export const getAuthenticatedMediaUrl = async (rawUrl) => {
 
   const fetchPromise = (async () => {
     try {
-      const response = await client.get(fullUrl, {
-        responseType: 'blob',
-        skipDeduplication: true,
-      });
+      // If rawUrl is already an external URL (e.g., direct Cloudinary CDN URL),
+      // fetch without credentials to avoid CORS wildcard credential rejection.
+      if (isExternalUrl(fullUrl)) {
+        const mediaRes = await fetch(fullUrl, {
+          credentials: 'omit',
+          mode: 'cors',
+        });
+        if (!mediaRes.ok) {
+          throw new Error(`Media fetch failed: ${mediaRes.status}`);
+        }
+        const blob = await mediaRes.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        storeInCache(rawUrl, objectUrl);
+        return objectUrl;
+      }
 
-      let blob;
+      // Step 1: Request short-lived signed URL from LYNQO backend with credentials
+      const separator = fullUrl.includes('?') ? '&' : '?';
+      const jsonUrl = fullUrl.includes('json=1') ? fullUrl : `${fullUrl}${separator}json=1`;
+
+      let response;
+      try {
+        response = await client.get(jsonUrl, {
+          skipDeduplication: true,
+        });
+      } catch (backendErr) {
+        // Fallback: If json=1 request fails, attempt direct blob request
+        response = await client.get(fullUrl, {
+          responseType: 'blob',
+          skipDeduplication: true,
+        });
+      }
+
+      // If response is already binary blob (e.g. from FileResponse or mock)
+      let directBlob = null;
       if (response instanceof Blob) {
-        blob = response;
+        directBlob = response;
       } else if (response && response.data instanceof Blob) {
-        blob = response.data;
-      } else {
-        // Fallback for binary arraybuffer / data
-        const mime = rawUrl.includes('/audio/') ? 'audio/webm' : 'image/jpeg';
-        blob = new Blob([response], { type: mime });
+        directBlob = response.data;
       }
 
-      const objectUrl = URL.createObjectURL(blob);
+      if (directBlob) {
+        const objectUrl = URL.createObjectURL(directBlob);
+        storeInCache(rawUrl, objectUrl);
+        return objectUrl;
+      }
 
-      // Evict oldest entries if capacity reached
-      if (mediaBlobCache.size >= MAX_CACHE_ENTRIES) {
-        let oldestKey = null;
-        let oldestTime = Infinity;
-        for (const [k, v] of mediaBlobCache.entries()) {
-          if (v.lastUsed < oldestTime) {
-            oldestTime = v.lastUsed;
-            oldestKey = k;
-          }
-        }
-        if (oldestKey) {
-          const oldEntry = mediaBlobCache.get(oldestKey);
-          if (oldEntry?.objectUrl && oldEntry.objectUrl.startsWith('blob:')) {
-            try {
-              URL.revokeObjectURL(oldEntry.objectUrl);
-            } catch (e) {
-              // ignore
+      const signedMediaUrl = response?.image_url || response?.audio_url;
+
+      if (signedMediaUrl) {
+        // Step 2: Fetch media bytes
+        if (isExternalUrl(signedMediaUrl)) {
+          // Cloudinary / external CDN: fetch with credentials: 'omit'
+          try {
+            const mediaRes = await fetch(signedMediaUrl, {
+              credentials: 'omit',
+              mode: 'cors',
+            });
+            if (!mediaRes.ok) {
+              throw new Error(`CDN fetch failed: ${mediaRes.status}`);
             }
+            const blob = await mediaRes.blob();
+            const objectUrl = URL.createObjectURL(blob);
+            storeInCache(rawUrl, objectUrl);
+            return objectUrl;
+          } catch (cdnErr) {
+            // Fallback to backend authenticated proxy (?proxy=1) if direct CDN fetch fails
+            const proxySeparator = fullUrl.includes('?') ? '&' : '?';
+            const proxyUrl = fullUrl.includes('proxy=1') ? fullUrl : `${fullUrl}${proxySeparator}proxy=1`;
+            const proxyResp = await client.get(proxyUrl, {
+              responseType: 'blob',
+              skipDeduplication: true,
+            });
+            const fallbackBlob = proxyResp instanceof Blob
+              ? proxyResp
+              : (proxyResp?.data instanceof Blob ? proxyResp.data : new Blob([proxyResp]));
+            const objectUrl = URL.createObjectURL(fallbackBlob);
+            storeInCache(rawUrl, objectUrl);
+            return objectUrl;
           }
-          mediaBlobCache.delete(oldestKey);
+        } else {
+          // Internal relative media path (e.g. local disk storage): fetch with client
+          const internalPath = signedMediaUrl.startsWith('/') ? signedMediaUrl : `/${signedMediaUrl}`;
+          const internalFullUrl = signedMediaUrl.startsWith('http://') || signedMediaUrl.startsWith('https://')
+            ? signedMediaUrl
+            : `${baseUrl}${internalPath}`;
+          const internalResp = await client.get(internalFullUrl, {
+            responseType: 'blob',
+            skipDeduplication: true,
+          });
+          const internalBlob = internalResp instanceof Blob
+            ? internalResp
+            : (internalResp?.data instanceof Blob ? internalResp.data : new Blob([internalResp]));
+          const objectUrl = URL.createObjectURL(internalBlob);
+          storeInCache(rawUrl, objectUrl);
+          return objectUrl;
         }
       }
 
-      mediaBlobCache.set(rawUrl, {
-        objectUrl,
-        lastUsed: Date.now(),
-        isCustomBlob: true,
-      });
+      // Fallback for raw binary arraybuffer / data
+      if (response) {
+        const mime = rawUrl.includes('/audio/') ? 'audio/webm' : 'image/jpeg';
+        const fallbackBlob = new Blob([response], { type: mime });
+        const objectUrl = URL.createObjectURL(fallbackBlob);
+        storeInCache(rawUrl, objectUrl);
+        return objectUrl;
+      }
 
-      return objectUrl;
+      return null;
     } catch (err) {
       // Secure fallback: Never leak session token into URL query parameters
       return null;

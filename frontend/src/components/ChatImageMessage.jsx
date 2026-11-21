@@ -42,7 +42,12 @@ export const ChatImageMessage = ({
     getAuthenticatedMediaUrl(rawUrl)
       .then((url) => {
         if (isMounted) {
-          setResolvedSrc(url);
+          if (url) {
+            setResolvedSrc(url);
+            setLoadError(false);
+          } else {
+            setLoadError(true);
+          }
         }
       })
       .catch(() => {
@@ -107,7 +112,12 @@ export const ChatImageMessage = ({
                   setIsLoaded(false);
                   if (rawUrl) {
                     getAuthenticatedMediaUrl(rawUrl).then((url) => {
-                      setResolvedSrc(url);
+                      if (url) {
+                        setResolvedSrc(url);
+                        setLoadError(false);
+                      } else {
+                        setLoadError(true);
+                      }
                     }).catch(() => setLoadError(true));
                   }
                 }}

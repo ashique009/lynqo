@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Download, ZoomIn, ZoomOut, RotateCcw, Loader2, AlertCircle } from 'lucide-react';
 import { getAuthenticatedMediaUrl } from '../utils/mediaUrl';
-import client from '../api/client';
+import client, { isExternalUrl } from '../api/client';
 
 export const ImageViewerModal = ({ message, onClose }) => {
   const [zoom, setZoom] = useState(1);
@@ -44,7 +44,12 @@ export const ImageViewerModal = ({ message, onClose }) => {
     getAuthenticatedMediaUrl(rawUrl)
       .then((url) => {
         if (isMounted) {
-          setFullSrc(url);
+          if (url) {
+            setFullSrc(url);
+            setHasError(false);
+          } else {
+            setHasError(true);
+          }
         }
       })
       .catch(() => {
@@ -69,6 +74,9 @@ export const ImageViewerModal = ({ message, onClose }) => {
       let downloadBlob;
       if (fullSrc.startsWith('blob:')) {
         const resp = await fetch(fullSrc);
+        downloadBlob = await resp.blob();
+      } else if (isExternalUrl(fullSrc)) {
+        const resp = await fetch(fullSrc, { credentials: 'omit', mode: 'cors' });
         downloadBlob = await resp.blob();
       } else {
         const resp = await client.get(fullSrc, { responseType: 'blob' });
@@ -182,7 +190,14 @@ export const ImageViewerModal = ({ message, onClose }) => {
                 setHasError(false);
                 setIsLoaded(false);
                 if (rawUrl) {
-                  getAuthenticatedMediaUrl(rawUrl).then(setFullSrc).catch(() => setHasError(true));
+                  getAuthenticatedMediaUrl(rawUrl).then((url) => {
+                    if (url) {
+                      setFullSrc(url);
+                      setHasError(false);
+                    } else {
+                      setHasError(true);
+                    }
+                  }).catch(() => setHasError(true));
                 }
               }}
               className="px-3 py-1.5 rounded-lg bg-rose-500/20 hover:bg-rose-500/30 text-white text-xs font-semibold cursor-pointer transition-colors"

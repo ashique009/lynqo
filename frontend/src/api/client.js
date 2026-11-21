@@ -1,8 +1,20 @@
 import axios from 'axios';
 import { cacheInvalidate } from '../utils/cache.js';
 
+export const getWindowOrigin = () => {
+  if (typeof window === 'undefined') return '';
+  if (window.location?.origin) return window.location.origin;
+  if (window.location?.protocol && window.location?.hostname) {
+    const port = window.location.port ? `:${window.location.port}` : '';
+    return `${window.location.protocol}//${window.location.hostname}${port}`;
+  }
+  return '';
+};
+
+const windowOrigin = getWindowOrigin();
+
 const API_BASE_URL = (typeof import.meta !== 'undefined' && import.meta.env ? import.meta.env.VITE_API_URL : null) || (
-  typeof window !== 'undefined' && window.location?.origin?.includes(':5173')
+  windowOrigin.includes(':5173')
     ? 'http://127.0.0.1:8001'
     : ''
 );
@@ -15,11 +27,52 @@ const client = axios.create({
   },
 });
 
-// Request Interceptor: Attach Token if available
+// Helper to determine if a target URL is external (not LYNQO backend)
+export const isExternalUrl = (url) => {
+  if (!url || typeof url !== 'string') return false;
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    return false;
+  }
+  try {
+    const targetUrl = new URL(url);
+    const targetOrigin = targetUrl.origin;
+
+    // Cloudinary and known third-party media origins are always external
+    if (targetUrl.hostname.includes('cloudinary.com')) {
+      return true;
+    }
+
+    const effectiveBase = API_BASE_URL || getWindowOrigin();
+    if (effectiveBase) {
+      const baseOrigin = new URL(effectiveBase, 'http://localhost').origin;
+      return targetOrigin !== baseOrigin;
+    }
+    const winOrigin = getWindowOrigin();
+    if (winOrigin) {
+      return targetOrigin !== winOrigin;
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+};
+
+// Request Interceptor: Attach Token if available, ensure credentials sent only to LYNQO backend
 client.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('lynqo_token');
+    // If request is directed to an external service (e.g. Cloudinary CDN),
+    // strictly strip credentials and Authorization headers to prevent leakage and CORS issues.
+    if (isExternalUrl(config.url)) {
+      config.withCredentials = false;
+      if (config.headers) {
+        delete config.headers.Authorization;
+      }
+      return config;
+    }
+
+    const token = typeof localStorage !== 'undefined' ? localStorage.getItem('lynqo_token') : null;
     if (token) {
+      config.headers = config.headers || {};
       config.headers.Authorization = `Bearer ${token}`;
     }
     return config;

@@ -1650,6 +1650,92 @@ class ImageMessageTests(BaseTestCase):
             self.assertEqual(res.status_code, 404)
             mock_cld.assert_not_called()
 
+    def test_image_media_view_unauthorized_third_party_user_forbidden(self):
+        """Users who are not participants in the conversation receive 403 Forbidden."""
+        other_user = User.objects.create(username="LYNQ-SNOOPER")
+        other_session = ProfileSession.objects.create(user=other_user, token="snooper_tok", is_active=True)
+        msg = Message.objects.create(
+            conversation=self.conv,
+            sender=self.user_a,
+            message_type='image',
+            image_storage_id='lynqo_chat_auth/32/auth_secret_img',
+            status='sent'
+        )
+
+        res = self.client.get(
+            f"/api/auth/conversations/{self.conv.id}/messages/{msg.id}/image/",
+            HTTP_AUTHORIZATION=f"Bearer {other_session.token}"
+        )
+        self.assertEqual(res.status_code, 403)
+        self.assertFalse(res.json().get('success', True))
+
+    def test_image_media_view_proxy_mode_streams_cloudinary_bytes(self):
+        """Image endpoint with ?proxy=1 streams image bytes directly from same origin."""
+        from unittest.mock import patch, MagicMock
+        from django.conf import settings
+
+        msg = Message.objects.create(
+            conversation=self.conv,
+            sender=self.user_a,
+            message_type='image',
+            image_storage_id=f'lynqo_chat_auth/{self.conv.id}/auth_img_proxy',
+            status='sent'
+        )
+
+        mock_http_response = MagicMock()
+        mock_http_response.read.return_value = b"\xff\xd8\xff\xe0mock_jpeg_stream"
+        mock_http_response.headers.get_content_type.return_value = "image/jpeg"
+
+        with patch.object(settings, 'CLOUDINARY_CLOUD_NAME', 'mock_cloud'), \
+             patch.object(settings, 'CLOUDINARY_API_KEY', 'mock_key'), \
+             patch.object(settings, 'CLOUDINARY_API_SECRET', 'mock_secret'), \
+             patch('cloudinary.utils.cloudinary_url', return_value=('https://res.cloudinary.com/mock/image/authenticated/s--123--/img.jpg', {})), \
+             patch('urllib.request.urlopen') as mock_urlopen:
+
+            mock_urlopen.return_value.__enter__.return_value = mock_http_response
+
+            res = self.client.get(
+                f"/api/auth/conversations/{self.conv.id}/messages/{msg.id}/image/?proxy=1",
+                HTTP_AUTHORIZATION=f"Bearer {self.token_b}"
+            )
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.content, b"\xff\xd8\xff\xe0mock_jpeg_stream")
+            self.assertEqual(res['Content-Type'], 'image/jpeg')
+
+    def test_voice_media_view_proxy_mode_streams_cloudinary_bytes(self):
+        """Voice endpoint with ?proxy=1 streams audio bytes directly without cross-origin redirect."""
+        from unittest.mock import patch, MagicMock
+        from django.conf import settings
+
+        voice_msg = Message.objects.create(
+            conversation=self.conv,
+            sender=self.user_a,
+            message_type='voice',
+            audio_storage_id=f'lynqo_voice_auth/{self.conv.id}/auth_voice_proxy',
+            audio_format='webm',
+            status='sent'
+        )
+
+        mock_http_response = MagicMock()
+        mock_http_response.read.return_value = b"RIFFmock_audio_stream"
+        mock_http_response.headers.get_content_type.return_value = "audio/webm"
+
+        with patch.object(settings, 'CLOUDINARY_CLOUD_NAME', 'mock_cloud'), \
+             patch.object(settings, 'CLOUDINARY_API_KEY', 'mock_key'), \
+             patch.object(settings, 'CLOUDINARY_API_SECRET', 'mock_secret'), \
+             patch('cloudinary.utils.cloudinary_url', return_value=('https://res.cloudinary.com/mock/video/authenticated/s--123--/voice.webm', {})), \
+             patch('urllib.request.urlopen') as mock_urlopen:
+
+            mock_urlopen.return_value.__enter__.return_value = mock_http_response
+
+            res = self.client.get(
+                f"/api/auth/conversations/{self.conv.id}/messages/{voice_msg.id}/audio/?proxy=1",
+                HTTP_AUTHORIZATION=f"Bearer {self.token_b}"
+            )
+            self.assertEqual(res.status_code, 200)
+            self.assertEqual(res.content, b"RIFFmock_audio_stream")
+            self.assertEqual(res['Content-Type'], 'audio/webm')
+
     def test_delete_message_for_everyone_destroys_cloudinary_images(self):
         """Deleting an image message for everyone destroys both main and thumbnail assets in Cloudinary."""
         from unittest.mock import patch

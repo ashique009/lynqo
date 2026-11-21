@@ -1580,6 +1580,8 @@ class VoiceMessageAudioView(APIView):
             if cached_url:
                 if request.query_params.get('json') == '1':
                     return Response({'success': True, 'audio_url': cached_url})
+                if request.query_params.get('proxy') in ('1', 'true', 'yes'):
+                    return self._proxy_audio(cached_url, content_type)
                 resp = HttpResponseRedirect(cached_url)
                 resp['Cache-Control'] = 'private, no-cache, no-store, must-revalidate'
                 resp['Pragma'] = 'no-cache'
@@ -1602,6 +1604,8 @@ class VoiceMessageAudioView(APIView):
                 cache.set(cache_key, signed_url, 1800)  # Cache for 30 minutes
                 if request.query_params.get('json') == '1':
                     return Response({'success': True, 'audio_url': signed_url})
+                if request.query_params.get('proxy') in ('1', 'true', 'yes'):
+                    return self._proxy_audio(signed_url, content_type)
                 resp = HttpResponseRedirect(signed_url)
                 resp['Cache-Control'] = 'private, no-cache, no-store, must-revalidate'
                 resp['Pragma'] = 'no-cache'
@@ -1611,6 +1615,13 @@ class VoiceMessageAudioView(APIView):
 
         if not msg.audio_file:
             return Response({'success': False, 'message': 'Audio file not found or inaccessible.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if request.query_params.get('json') == '1':
+            return Response({
+                'success': True,
+                'audio_url': f"/api/auth/conversations/{conv.id}/messages/{msg.id}/audio/",
+                'is_direct': True,
+            })
 
         try:
             file_path = msg.audio_file.path
@@ -1664,6 +1675,22 @@ class VoiceMessageAudioView(APIView):
         except Exception as file_err:
             logger.error("Local audio file open error: %s", file_err)
             return Response({'success': False, 'message': 'Audio file not found or inaccessible.'}, status=status.HTTP_404_NOT_FOUND)
+
+    def _proxy_audio(self, target_url, content_type):
+        import urllib.request
+        try:
+            req = urllib.request.Request(target_url, headers={'User-Agent': 'LYNQO-Media-Proxy/1.0'})
+            with urllib.request.urlopen(req, timeout=15) as res:
+                content = res.read()
+                c_type = res.headers.get_content_type() or content_type
+                proxy_resp = HttpResponse(content, content_type=c_type)
+                proxy_resp['Cache-Control'] = 'private, no-cache, no-store, must-revalidate'
+                proxy_resp['Pragma'] = 'no-cache'
+                proxy_resp['Accept-Ranges'] = 'bytes'
+                return proxy_resp
+        except Exception as e:
+            logger.error("Audio proxy failed for %s: %s", target_url, e)
+            return Response({'success': False, 'message': 'Failed to proxy audio.'}, status=status.HTTP_502_BAD_GATEWAY)
 
 
 class ImageMessageUploadView(APIView):
@@ -1924,6 +1951,8 @@ class ImageMessageMediaView(APIView):
             if cached_url:
                 if request.query_params.get('json') == '1':
                     return Response({'success': True, 'image_url': cached_url})
+                if request.query_params.get('proxy') in ('1', 'true', 'yes'):
+                    return self._proxy_image(cached_url)
                 resp = HttpResponseRedirect(cached_url)
                 resp['Cache-Control'] = 'private, no-cache, no-store, must-revalidate'
                 resp['Pragma'] = 'no-cache'
@@ -1960,6 +1989,8 @@ class ImageMessageMediaView(APIView):
                 cache.set(cache_key, c_url, 1800)  # Cache signed URL for 30 minutes
                 if request.query_params.get('json') == '1':
                     return Response({'success': True, 'image_url': c_url})
+                if request.query_params.get('proxy') in ('1', 'true', 'yes'):
+                    return self._proxy_image(c_url)
                 resp = HttpResponseRedirect(c_url)
                 resp['Cache-Control'] = 'private, no-cache, no-store, must-revalidate'
                 resp['Pragma'] = 'no-cache'
@@ -1970,6 +2001,10 @@ class ImageMessageMediaView(APIView):
         target_field = msg.image_thumbnail if (is_thumb and msg.image_thumbnail) else msg.image_file
         if not target_field:
             return Response({'success': False, 'message': 'Image file missing.'}, status=status.HTTP_404_NOT_FOUND)
+
+        if request.query_params.get('json') == '1':
+            media_path = f"/api/auth/conversations/{conv.id}/messages/{msg.id}/image/{'?thumb=1' if is_thumb else ''}"
+            return Response({'success': True, 'image_url': media_path, 'is_direct': True})
 
         try:
             file_handle = target_field.open('rb')
@@ -1987,4 +2022,20 @@ class ImageMessageMediaView(APIView):
         except Exception as e:
             logger.error("Failed to read image file from disk: %s", e)
             return Response({'success': False, 'message': 'Failed to read image file.'}, status=status.HTTP_404_NOT_FOUND)
+
+    def _proxy_image(self, target_url):
+        import urllib.request
+        try:
+            req = urllib.request.Request(target_url, headers={'User-Agent': 'LYNQO-Media-Proxy/1.0'})
+            with urllib.request.urlopen(req, timeout=15) as res:
+                content = res.read()
+                content_type = res.headers.get_content_type() or 'image/jpeg'
+                proxy_resp = HttpResponse(content, content_type=content_type)
+                proxy_resp['Cache-Control'] = 'private, no-cache, no-store, must-revalidate'
+                proxy_resp['Pragma'] = 'no-cache'
+                proxy_resp['X-Content-Type-Options'] = 'nosniff'
+                return proxy_resp
+        except Exception as e:
+            logger.error("Image proxy failed for %s: %s", target_url, e)
+            return Response({'success': False, 'message': 'Failed to proxy image.'}, status=status.HTTP_502_BAD_GATEWAY)
 
