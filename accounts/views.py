@@ -1245,8 +1245,42 @@ class MessageDeleteView(APIView):
                         msg.audio_file.delete(save=False)
                     except Exception:
                         pass
+                cache.delete(f"voice_signed_url:{msg.id}")
 
-            msg.save(update_fields=['is_deleted', 'content', 'audio_storage_id', 'audio_file', 'updated_at'])
+            if msg.message_type == 'image':
+                c_cloud = getattr(settings, 'CLOUDINARY_CLOUD_NAME', None)
+                if c_cloud:
+                    try:
+                        import cloudinary.uploader
+                        if msg.image_storage_id and not msg.image_storage_id.startswith('chat_images/'):
+                            main_type = 'authenticated' if ('lynqo_chat_auth' in msg.image_storage_id or '_auth' in msg.image_storage_id or 'auth_' in msg.image_storage_id) else 'upload'
+                            cloudinary.uploader.destroy(msg.image_storage_id, resource_type='image', type=main_type)
+                        if msg.image_thumbnail_id and not msg.image_thumbnail_id.startswith('chat_thumbnails/'):
+                            thumb_type = 'authenticated' if ('lynqo_chat_auth' in msg.image_thumbnail_id or '_auth' in msg.image_thumbnail_id or 'auth_' in msg.image_thumbnail_id) else 'upload'
+                            cloudinary.uploader.destroy(msg.image_thumbnail_id, resource_type='image', type=thumb_type)
+                    except Exception as cl_err:
+                        logger.warning("Failed to destroy Cloudinary image assets: %s", cl_err)
+
+                msg.image_storage_id = None
+                msg.image_thumbnail_id = None
+                if msg.image_file:
+                    try:
+                        msg.image_file.delete(save=False)
+                    except Exception:
+                        pass
+                if msg.image_thumbnail:
+                    try:
+                        msg.image_thumbnail.delete(save=False)
+                    except Exception:
+                        pass
+                cache.delete(f"image_signed_url:{msg.id}:0")
+                cache.delete(f"image_signed_url:{msg.id}:1")
+
+            msg.save(update_fields=[
+                'is_deleted', 'content', 'audio_storage_id', 'audio_file',
+                'image_storage_id', 'image_thumbnail_id', 'image_file', 'image_thumbnail',
+                'updated_at'
+            ])
 
             other_user = conv.get_other_participant(request.user)
             channel_layer = get_channel_layer()
@@ -1546,21 +1580,32 @@ class VoiceMessageAudioView(APIView):
             if cached_url:
                 if request.query_params.get('json') == '1':
                     return Response({'success': True, 'audio_url': cached_url})
-                return HttpResponseRedirect(cached_url)
+                resp = HttpResponseRedirect(cached_url)
+                resp['Cache-Control'] = 'private, no-cache, no-store, must-revalidate'
+                resp['Pragma'] = 'no-cache'
+                return resp
 
             try:
                 import cloudinary.utils
-                signed_url, _ = cloudinary.utils.cloudinary_url(
-                    storage_id,
-                    resource_type='video',
-                    sign_url=True,
-                    type='authenticated',
-                    expires_at=int(time.time()) + 3600
-                )
+                auth_token_key = getattr(settings, 'CLOUDINARY_AUTH_TOKEN_KEY', None)
+                token_opts = {'duration': 3600, 'key': auth_token_key} if auth_token_key else None
+                url_kwargs = {
+                    'resource_type': 'video',
+                    'sign_url': True,
+                    'type': 'authenticated',
+                    'expires_at': int(time.time()) + 3600,
+                }
+                if token_opts:
+                    url_kwargs['auth_token'] = token_opts
+
+                signed_url, _ = cloudinary.utils.cloudinary_url(storage_id, **url_kwargs)
                 cache.set(cache_key, signed_url, 1800)  # Cache for 30 minutes
                 if request.query_params.get('json') == '1':
                     return Response({'success': True, 'audio_url': signed_url})
-                return HttpResponseRedirect(signed_url)
+                resp = HttpResponseRedirect(signed_url)
+                resp['Cache-Control'] = 'private, no-cache, no-store, must-revalidate'
+                resp['Pragma'] = 'no-cache'
+                return resp
             except Exception as cl_err:
                 logger.error("Cloudinary signed URL error: %s", cl_err)
 
@@ -1722,11 +1767,14 @@ class ImageMessageUploadView(APIView):
         if c_cloud and c_key and c_secret:
             try:
                 import cloudinary.uploader
+                auth_folder = f"lynqo_chat_auth/{conv.id}"
+                auth_base = f"auth_{safe_base}"
                 up_main = cloudinary.uploader.upload(
                     main_bytes,
                     resource_type='image',
-                    folder=f"lynqo_chat/{conv.id}",
-                    public_id=safe_base,
+                    type='authenticated',
+                    folder=auth_folder,
+                    public_id=auth_base,
                     overwrite=False,
                 )
                 image_storage_id = up_main.get('public_id')
@@ -1734,8 +1782,9 @@ class ImageMessageUploadView(APIView):
                 up_thumb = cloudinary.uploader.upload(
                     thumb_bytes,
                     resource_type='image',
-                    folder=f"lynqo_chat/{conv.id}/thumbs",
-                    public_id=f"{safe_base}_thumb",
+                    type='authenticated',
+                    folder=f"{auth_folder}/thumbs",
+                    public_id=f"{auth_base}_thumb",
                     overwrite=False,
                 )
                 thumb_storage_id = up_thumb.get('public_id')
@@ -1858,22 +1907,63 @@ class ImageMessageMediaView(APIView):
         is_thumb = request.query_params.get('thumb') in ('1', 'true', 'yes')
 
         c_cloud = getattr(settings, 'CLOUDINARY_CLOUD_NAME', None)
+        c_key = getattr(settings, 'CLOUDINARY_API_KEY', None)
+        c_secret = getattr(settings, 'CLOUDINARY_API_SECRET', None)
         storage_id = msg.image_thumbnail_id if (is_thumb and msg.image_thumbnail_id) else msg.image_storage_id
 
-        if c_cloud and storage_id and not storage_id.startswith('/') and not os.path.exists(str(storage_id)):
+        is_cloudinary = (
+            c_cloud and c_key and c_secret and storage_id
+            and not storage_id.startswith('chat_images/')
+            and not storage_id.startswith('chat_thumbnails/')
+            and not os.path.exists(str(storage_id))
+        )
+
+        if is_cloudinary:
+            cache_key = f"image_signed_url:{msg.id}:{1 if is_thumb else 0}"
+            cached_url = cache.get(cache_key)
+            if cached_url:
+                if request.query_params.get('json') == '1':
+                    return Response({'success': True, 'image_url': cached_url})
+                resp = HttpResponseRedirect(cached_url)
+                resp['Cache-Control'] = 'private, no-cache, no-store, must-revalidate'
+                resp['Pragma'] = 'no-cache'
+                return resp
+
             try:
                 import cloudinary.utils
                 transformation = {'quality': 'auto', 'fetch_format': 'auto'}
                 if is_thumb:
                     transformation.update({'width': 360, 'crop': 'limit'})
-                c_url, _ = cloudinary.utils.cloudinary_url(
-                    storage_id,
-                    resource_type='image',
-                    type='upload',
-                    secure=True,
-                    transformation=transformation
-                )
-                return HttpResponseRedirect(c_url)
+
+                # Authenticated type for all modern protected images; graceful upload type for legacy
+                if 'lynqo_chat_auth' in storage_id or '_auth' in storage_id or 'auth_' in storage_id:
+                    cld_type = 'authenticated'
+                elif storage_id.startswith('lynqo_chat/'):
+                    cld_type = 'upload'
+                else:
+                    cld_type = 'authenticated'
+
+                auth_token_key = getattr(settings, 'CLOUDINARY_AUTH_TOKEN_KEY', None)
+                token_opts = {'duration': 3600, 'key': auth_token_key} if auth_token_key else None
+                url_kwargs = {
+                    'resource_type': 'image',
+                    'type': cld_type,
+                    'sign_url': True,
+                    'expires_at': int(time.time()) + 3600,
+                    'secure': True,
+                    'transformation': transformation,
+                }
+                if token_opts:
+                    url_kwargs['auth_token'] = token_opts
+
+                c_url, _ = cloudinary.utils.cloudinary_url(storage_id, **url_kwargs)
+                cache.set(cache_key, c_url, 1800)  # Cache signed URL for 30 minutes
+                if request.query_params.get('json') == '1':
+                    return Response({'success': True, 'image_url': c_url})
+                resp = HttpResponseRedirect(c_url)
+                resp['Cache-Control'] = 'private, no-cache, no-store, must-revalidate'
+                resp['Pragma'] = 'no-cache'
+                return resp
             except Exception as err:
                 logger.warning("Cloudinary URL generation error: %s", err)
 
@@ -1890,7 +1980,9 @@ class ImageMessageMediaView(APIView):
             elif ext == '.webp':
                 mime = 'image/webp'
             resp = FileResponse(file_handle, content_type=mime)
-            resp['Cache-Control'] = 'private, max-age=86400'
+            resp['Cache-Control'] = 'private, no-cache, no-store, must-revalidate'
+            resp['Pragma'] = 'no-cache'
+            resp['X-Content-Type-Options'] = 'nosniff'
             return resp
         except Exception as e:
             logger.error("Failed to read image file from disk: %s", e)

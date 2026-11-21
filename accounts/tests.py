@@ -1488,6 +1488,238 @@ class ImageMessageTests(BaseTestCase):
         )
         self.assertEqual(res_view.status_code, 403)
 
+    def test_upload_image_message_cloudinary_uses_authenticated_type(self):
+        """Chat image upload with Cloudinary credentials passes resource_type='image' and type='authenticated'."""
+        from unittest.mock import patch
+        from django.conf import settings
+
+        with patch.object(settings, 'CLOUDINARY_CLOUD_NAME', 'mock_cloud'), \
+             patch.object(settings, 'CLOUDINARY_API_KEY', 'mock_key'), \
+             patch.object(settings, 'CLOUDINARY_API_SECRET', 'mock_secret'), \
+             patch('cloudinary.uploader.upload') as mock_upload:
+
+            mock_upload.side_effect = [
+                {
+                    'public_id': f'lynqo_chat_auth/{self.conv.id}/auth_img_main_123',
+                    'secure_url': 'https://res.cloudinary.com/mock/auth_img_main.jpg',
+                    'resource_type': 'image'
+                },
+                {
+                    'public_id': f'lynqo_chat_auth/{self.conv.id}/thumbs/auth_img_thumb_123',
+                    'secure_url': 'https://res.cloudinary.com/mock/auth_img_thumb.jpg',
+                    'resource_type': 'image'
+                }
+            ]
+
+            test_img = create_test_image("secret_photo.png", size=(500, 400), format="PNG")
+            res = self.client.post(
+                f"/api/auth/conversations/{self.conv.id}/messages/image/",
+                {'image': test_img, 'client_message_id': 'cli-cld-img-1'},
+                HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+            )
+            self.assertEqual(res.status_code, 201)
+            data = res.json()
+            self.assertTrue(data['success'])
+
+            msg = Message.objects.get(id=data['message']['id'])
+            self.assertEqual(msg.image_storage_id, f'lynqo_chat_auth/{self.conv.id}/auth_img_main_123')
+            self.assertEqual(msg.image_thumbnail_id, f'lynqo_chat_auth/{self.conv.id}/thumbs/auth_img_thumb_123')
+
+            # Verify both uploads used resource_type='image' and type='authenticated'
+            self.assertEqual(mock_upload.call_count, 2)
+            main_call_kwargs = mock_upload.call_args_list[0][1]
+            self.assertEqual(main_call_kwargs.get('resource_type'), 'image')
+            self.assertEqual(main_call_kwargs.get('type'), 'authenticated')
+            self.assertIn('lynqo_chat_auth', main_call_kwargs.get('folder', ''))
+
+            thumb_call_kwargs = mock_upload.call_args_list[1][1]
+            self.assertEqual(thumb_call_kwargs.get('resource_type'), 'image')
+            self.assertEqual(thumb_call_kwargs.get('type'), 'authenticated')
+            self.assertIn('thumbs', thumb_call_kwargs.get('folder', ''))
+
+    def test_image_media_view_returns_authenticated_signed_url_with_strict_caching(self):
+        """Image media view generates short-lived signed URLs for authenticated assets with private cache headers."""
+        from unittest.mock import patch
+        from django.conf import settings
+
+        msg = Message.objects.create(
+            conversation=self.conv,
+            sender=self.user_a,
+            message_type='image',
+            image_storage_id=f'lynqo_chat_auth/{self.conv.id}/auth_img_test_abc',
+            image_thumbnail_id=f'lynqo_chat_auth/{self.conv.id}/thumbs/auth_img_test_abc_thumb',
+            status='sent'
+        )
+
+        with patch.object(settings, 'CLOUDINARY_CLOUD_NAME', 'mock_cloud'), \
+             patch.object(settings, 'CLOUDINARY_API_KEY', 'mock_key'), \
+             patch.object(settings, 'CLOUDINARY_API_SECRET', 'mock_secret'), \
+             patch('cloudinary.utils.cloudinary_url') as mock_cld_url:
+
+            mock_cld_url.return_value = ('https://res.cloudinary.com/mock/image/authenticated/s--sig--/v1/auth_img_test_abc.jpg', {})
+
+            # 1. Full image request by conversation participant
+            res_full = self.client.get(
+                f"/api/auth/conversations/{self.conv.id}/messages/{msg.id}/image/",
+                HTTP_AUTHORIZATION=f"Bearer {self.token_b}"
+            )
+            self.assertEqual(res_full.status_code, 302)
+            self.assertEqual(res_full.headers['Location'], 'https://res.cloudinary.com/mock/image/authenticated/s--sig--/v1/auth_img_test_abc.jpg')
+            self.assertIn('private', res_full.headers.get('Cache-Control', ''))
+            self.assertIn('no-store', res_full.headers.get('Cache-Control', ''))
+
+            # Verify cloudinary_url args
+            mock_cld_url.assert_called_once()
+            args, kwargs = mock_cld_url.call_args
+            self.assertEqual(args[0], msg.image_storage_id)
+            self.assertEqual(kwargs.get('type'), 'authenticated')
+            self.assertTrue(kwargs.get('sign_url'))
+            self.assertGreater(kwargs.get('expires_at', 0), 0)
+
+            # 2. Thumbnail request with ?thumb=1
+            mock_cld_url.reset_mock()
+            mock_cld_url.return_value = ('https://res.cloudinary.com/mock/image/authenticated/s--sig--/v1/thumb.jpg', {})
+            res_thumb = self.client.get(
+                f"/api/auth/conversations/{self.conv.id}/messages/{msg.id}/image/?thumb=1",
+                HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+            )
+            self.assertEqual(res_thumb.status_code, 302)
+            args_thumb, kwargs_thumb = mock_cld_url.call_args
+            self.assertEqual(args_thumb[0], msg.image_thumbnail_id)
+            self.assertEqual(kwargs_thumb.get('type'), 'authenticated')
+            self.assertTrue(kwargs_thumb.get('sign_url'))
+            self.assertEqual(kwargs_thumb.get('transformation', {}).get('width'), 360)
+
+            # 3. JSON URL request with ?json=1
+            res_json = self.client.get(
+                f"/api/auth/conversations/{self.conv.id}/messages/{msg.id}/image/?thumb=1&json=1",
+                HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+            )
+            self.assertEqual(res_json.status_code, 200)
+            self.assertTrue(res_json.json()['success'])
+            self.assertEqual(res_json.json()['image_url'], 'https://res.cloudinary.com/mock/image/authenticated/s--sig--/v1/thumb.jpg')
+
+    def test_image_media_view_legacy_public_image_backward_compatibility(self):
+        """Legacy Cloudinary images with type='upload' receive signed URLs and load seamlessly."""
+        from unittest.mock import patch
+        from django.conf import settings
+
+        legacy_msg = Message.objects.create(
+            conversation=self.conv,
+            sender=self.user_a,
+            message_type='image',
+            image_storage_id=f'lynqo_chat/{self.conv.id}/img_legacy_999',
+            image_thumbnail_id=f'lynqo_chat/{self.conv.id}/thumbs/img_legacy_999_thumb',
+            status='sent'
+        )
+
+        with patch.object(settings, 'CLOUDINARY_CLOUD_NAME', 'mock_cloud'), \
+             patch.object(settings, 'CLOUDINARY_API_KEY', 'mock_key'), \
+             patch.object(settings, 'CLOUDINARY_API_SECRET', 'mock_secret'), \
+             patch('cloudinary.utils.cloudinary_url') as mock_cld_url:
+
+            mock_cld_url.return_value = ('https://res.cloudinary.com/mock/image/upload/s--sig--/v1/img_legacy_999.jpg', {})
+
+            res_legacy = self.client.get(
+                f"/api/auth/conversations/{self.conv.id}/messages/{legacy_msg.id}/image/",
+                HTTP_AUTHORIZATION=f"Bearer {self.token_b}"
+            )
+            self.assertEqual(res_legacy.status_code, 302)
+            args, kwargs = mock_cld_url.call_args
+            self.assertEqual(args[0], legacy_msg.image_storage_id)
+            self.assertEqual(kwargs.get('type'), 'upload')
+            self.assertTrue(kwargs.get('sign_url'))
+
+    def test_image_media_view_deleted_message_returns_404(self):
+        """Deleted image message returns 404 Not Found and never attempts Cloudinary lookups."""
+        from unittest.mock import patch
+        deleted_msg = Message.objects.create(
+            conversation=self.conv,
+            sender=self.user_a,
+            message_type='image',
+            image_storage_id='lynqo_chat_auth/32/auth_deleted_123',
+            is_deleted=True,
+            status='sent'
+        )
+
+        with patch('cloudinary.utils.cloudinary_url') as mock_cld:
+            res = self.client.get(
+                f"/api/auth/conversations/{self.conv.id}/messages/{deleted_msg.id}/image/",
+                HTTP_AUTHORIZATION=f"Bearer {self.token_b}"
+            )
+            self.assertEqual(res.status_code, 404)
+            mock_cld.assert_not_called()
+
+    def test_delete_message_for_everyone_destroys_cloudinary_images(self):
+        """Deleting an image message for everyone destroys both main and thumbnail assets in Cloudinary."""
+        from unittest.mock import patch
+        from django.conf import settings
+        from django.core.cache import cache
+
+        msg = Message.objects.create(
+            conversation=self.conv,
+            sender=self.user_a,
+            message_type='image',
+            image_storage_id=f'lynqo_chat_auth/{self.conv.id}/auth_img_del_123',
+            image_thumbnail_id=f'lynqo_chat_auth/{self.conv.id}/thumbs/auth_img_del_123_thumb',
+            status='sent'
+        )
+        cache.set(f"image_signed_url:{msg.id}:0", "http://cached.url", 60)
+        cache.set(f"image_signed_url:{msg.id}:1", "http://cached.thumb", 60)
+
+        with patch.object(settings, 'CLOUDINARY_CLOUD_NAME', 'mock_cloud'), \
+             patch('cloudinary.uploader.destroy') as mock_destroy:
+
+            res = self.client.delete(
+                f"/api/auth/conversations/{self.conv.id}/messages/{msg.id}/delete/?type=everyone",
+                HTTP_AUTHORIZATION=f"Bearer {self.token_a}"
+            )
+            self.assertEqual(res.status_code, 200)
+
+            # Cloudinary destroy should be called twice (main + thumb)
+            self.assertEqual(mock_destroy.call_count, 2)
+            destroy_calls = [call[1] for call in mock_destroy.call_args_list]
+            call_types = [c.get('type') for c in destroy_calls]
+            self.assertEqual(call_types, ['authenticated', 'authenticated'])
+
+            msg.refresh_from_db()
+            self.assertTrue(msg.is_deleted)
+            self.assertIsNone(msg.image_storage_id)
+            self.assertIsNone(msg.image_thumbnail_id)
+            self.assertIsNone(cache.get(f"image_signed_url:{msg.id}:0"))
+            self.assertIsNone(cache.get(f"image_signed_url:{msg.id}:1"))
+
+    def test_adaptive_cloudinary_storage_chat_image_authenticated_and_avatar_public(self):
+        """AdaptiveCloudinaryStorage assigns type='authenticated' to chat images and type='upload' to avatars."""
+        from accounts.storage import AdaptiveCloudinaryStorage
+        from unittest.mock import patch
+
+        storage = AdaptiveCloudinaryStorage()
+
+        with patch('cloudinary.uploader.upload') as mock_upload:
+            # 1. Profile Avatar -> Public upload
+            storage._upload("profile_pics/user_avatar.jpg", b"fake_avatar")
+            _, kwargs_avatar = mock_upload.call_args
+            self.assertEqual(kwargs_avatar.get('type'), 'upload')
+            self.assertEqual(kwargs_avatar.get('resource_type'), 'image')
+
+            # 2. Chat Image -> Authenticated upload
+            storage._upload("chat_images/private_photo.png", b"fake_chat_png")
+            _, kwargs_chat_img = mock_upload.call_args
+            self.assertEqual(kwargs_chat_img.get('type'), 'authenticated')
+            self.assertEqual(kwargs_chat_img.get('resource_type'), 'image')
+
+            # 3. Chat Thumbnail -> Authenticated upload
+            storage._upload("chat_thumbnails/private_thumb.jpg", b"fake_thumb")
+            _, kwargs_thumb = mock_upload.call_args
+            self.assertEqual(kwargs_thumb.get('type'), 'authenticated')
+
+            # 4. Voice recording -> Authenticated video upload
+            storage._upload("voice_messages/voice_record.webm", b"fake_voice")
+            _, kwargs_voice = mock_upload.call_args
+            self.assertEqual(kwargs_voice.get('type'), 'authenticated')
+            self.assertEqual(kwargs_voice.get('resource_type'), 'video')
+
 
 class RealtimeMessagingAndPresenceTests(TestCase):
     def test_presence_tracking_multi_session(self):

@@ -36,8 +36,23 @@ class AdaptiveCloudinaryStorage(MediaCloudinaryStorage):
             'resource_type': resource_type,
             'tags': self.TAG,
         }
-        # Voice recordings are authenticated for privacy; avatars are public
-        if resource_type == 'video' or 'lynqo_voice' in str(name) or 'voice_' in os.path.basename(str(name)):
+        name_str = str(name or '').lower()
+        base_name = os.path.basename(name_str)
+
+        # Profile avatars are explicitly public for user profile discovery
+        is_avatar = 'profile_pics' in name_str or 'avatar' in name_str
+
+        # Voice recordings and private chat media are authenticated for privacy
+        is_private_chat = (
+            'chat_images' in name_str
+            or 'chat_thumbnails' in name_str
+            or 'lynqo_chat' in name_str
+            or 'lynqo_voice' in name_str
+            or 'voice_' in base_name
+            or resource_type == 'video'
+        )
+
+        if is_private_chat and not is_avatar:
             options['type'] = 'authenticated'
         else:
             options['type'] = 'upload'
