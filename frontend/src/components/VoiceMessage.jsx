@@ -248,10 +248,10 @@ export const VoiceMessage = React.memo(({
           <button
             onClick={togglePlayPause}
             disabled={isLoading || message.status === 'sending'}
-            className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-all shadow-md cursor-pointer ${
+            className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 transition-transform active:scale-95 cursor-pointer ${
               isMe
-                ? 'bg-white text-indigo-600 hover:bg-slate-100 disabled:opacity-50'
-                : 'bg-gradient-to-r from-pink-500 to-indigo-600 text-white hover:opacity-90 disabled:opacity-50'
+                ? 'bg-white/95 text-[#7C5CFA] hover:bg-white disabled:opacity-50 shadow-sm'
+                : 'liquid-glass-gradient-btn text-white hover:opacity-95 disabled:opacity-50'
             }`}
             aria-label={isPlaying ? 'Pause voice message' : 'Play voice message'}
           >
@@ -281,7 +281,9 @@ export const VoiceMessage = React.memo(({
                 <div
                   key={idx}
                   style={{ height: `${heightPercent}%` }}
-                  className={`flex-1 rounded-full ${isMe ? 'bg-white/30' : 'bg-slate-600'}`}
+                  className={`flex-1 rounded-full ${
+                    isMe ? 'bg-white/35' : 'bg-white/40'
+                  }`}
                 />
               ))}
             </div>
@@ -294,27 +296,21 @@ export const VoiceMessage = React.memo(({
                 <div
                   key={idx}
                   style={{ height: `${heightPercent}%` }}
-                  className={`flex-1 rounded-full ${
-                    isMe ? 'bg-white shadow-[0_0_8px_rgba(255,255,255,0.4)]' : 'bg-pink-400'
-                  }`}
+                  className="flex-1 rounded-full bg-white"
                 />
               ))}
             </div>
           </div>
 
           {/* Time & Speed Controls */}
-          <div className="flex items-center justify-between text-[11px] font-mono leading-none">
-            <span ref={timerTextRef} className={isMe ? 'text-white/80' : 'text-slate-400'}>
+          <div className="flex items-center justify-between text-[12px] font-mono tabular-nums leading-none">
+            <span ref={timerTextRef} className="text-white/90">
               {formatTimer(duration)}
             </span>
 
             <button
               onClick={cycleSpeed}
-              className={`px-1.5 py-0.5 rounded text-[10px] font-bold font-sans transition-colors cursor-pointer ${
-                isMe
-                  ? 'bg-white/20 hover:bg-white/30 text-white'
-                  : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
-              }`}
+              className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold font-sans transition-colors cursor-pointer bg-white/15 hover:bg-white/25 text-white border border-white/15"
               title="Change playback speed"
             >
               {playbackSpeed}x

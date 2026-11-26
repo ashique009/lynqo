@@ -49,19 +49,19 @@ export const ToastProvider = ({ children }) => {
   return (
     <ToastContext.Provider value={contextValue}>
       {children}
-      <div className="fixed bottom-20 md:bottom-5 left-4 right-4 md:left-auto md:right-5 z-[9999] flex flex-col gap-2.5 md:max-w-sm md:w-full pointer-events-none">
+      <div className="fixed bottom-24 md:bottom-5 left-4 right-4 md:left-auto md:right-5 z-[9999] flex flex-col gap-2.5 md:max-w-sm md:w-full pointer-events-none">
         {toasts.map((toast) => (
           <div
             key={toast.id}
-            className={`lynqo-toast-enter pointer-events-auto flex items-start gap-3 p-3.5 rounded-2xl bg-[#111827]/95 border ${getBorderColor(toast.type)} shadow-xl backdrop-blur-md`}
+            className={`lynqo-toast-enter liquid-glass-sheet pointer-events-auto flex items-start gap-3 p-3.5 rounded-2xl border ${getBorderColor(toast.type)}`}
           >
             <div className="flex-shrink-0 mt-0.5">{getIcon(toast.type)}</div>
-            <div className="flex-grow text-sm font-medium text-[#F1F5F9] pr-2">
+            <div className="flex-grow text-sm font-medium text-[#38323F] dark:text-[#F1F5F9] pr-2">
               {toast.message}
             </div>
             <button
               onClick={() => removeToast(toast.id)}
-              className="flex-shrink-0 text-[#94A3B8] hover:text-[#F1F5F9] transition-colors"
+              className="flex-shrink-0 text-[#93889D] dark:text-[#94A3B8] hover:text-[#38323F] dark:hover:text-[#F1F5F9] transition-colors"
             >
               <X className="w-4 h-4" />
             </button>

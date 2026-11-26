@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Send, Mic, Lock, Trash2, Pause, Play, Image as ImageIcon, Camera
+  Send, Mic, Lock, Trash2, Pause, Play, Image as ImageIcon, Camera, Plus
 } from 'lucide-react';
 import { wsService } from '../../services/websocketService';
 import useVoiceRecorder from '../../hooks/useVoiceRecorder';
@@ -163,241 +163,229 @@ export const MessageComposer = React.memo(({
 
   return (
     <>
-      <div className="shrink-0 border-t border-white/[0.08] bg-[#080C14]/95 pb-safe">
-        <ReplyPreview
-          replyingTo={replyingTo}
-          currentProfileId={currentProfileId}
-          onCancel={onCancelReply}
-        />
+      {/* Floating Apple-inspired Liquid Glass Composer */}
+      <div className="absolute bottom-0 left-0 right-0 z-20 px-2.5 sm:px-4 pt-2 pb-safe pointer-events-none">
+        <div className="pointer-events-auto">
+          <ReplyPreview
+            replyingTo={replyingTo}
+            currentProfileId={currentProfileId}
+            onCancel={onCancelReply}
+          />
 
-        {isRecording ? (
-          <div className="p-2.5 sm:p-3 md:p-4">
-            {isLocked ? (
-              /* Locked Hands-free Recording Bar */
-              <div className="flex items-center justify-between w-full p-2 bg-slate-900/90 rounded-2xl border border-slate-700/60 shadow-xl backdrop-blur-md">
-                <button
-                  type="button"
-                  onClick={cancelRecording}
-                  className="p-2.5 sm:p-3 rounded-xl bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0"
-                  title="Discard recording"
-                  aria-label="Discard recording"
-                >
-                  <Trash2 className="w-4 sm:w-5 h-4 sm:h-5" />
-                </button>
-
-                <div className="flex items-center gap-1.5 sm:gap-3">
-                  <div className="flex items-center gap-1.5">
-                    <span className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ${isPaused ? 'bg-amber-400' : 'bg-rose-500 animate-pulse motion-reduce:animate-none'}`} />
-                    <span className="font-mono text-xs sm:text-sm font-bold text-white min-w-[32px] sm:min-w-[38px]">
-                      {formatRecordingTime(recordDuration)}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-1 h-5 sm:h-6 px-1 sm:px-2">
-                    {audioLevels.map((lvl, idx) => (
-                      <div
-                        key={idx}
-                        style={{ height: `${Math.round(lvl * 100)}%` }}
-                        className={`w-0.5 sm:w-1 rounded-full transition-all duration-75 ${
-                          isPaused ? 'bg-slate-600' : 'bg-pink-400'
-                        }`}
-                      />
-                    ))}
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-1.5 sm:gap-2">
-                  {isPaused && (
-                    <button
-                      type="button"
-                      onClick={togglePreview}
-                      className={`p-2.5 sm:p-3 rounded-xl transition-colors cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center ${
-                        isPlayingPreview ? 'bg-pink-500/20 text-pink-400 border border-pink-500/30' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
-                      }`}
-                      title={isPlayingPreview ? 'Pause preview' : 'Listen to recording'}
-                      aria-label={isPlayingPreview ? 'Pause preview' : 'Listen to recording'}
-                    >
-                      {isPlayingPreview ? <Pause className="w-4 sm:w-5 h-4 sm:h-5 fill-current" /> : <Play className="w-4 sm:w-5 h-4 sm:h-5 fill-current" />}
-                    </button>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={isPaused ? resumeRecording : pauseRecording}
-                    className="p-2.5 sm:p-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center"
-                    title={isPaused ? 'Resume recording' : 'Pause recording'}
-                    aria-label={isPaused ? 'Resume recording' : 'Pause recording'}
-                  >
-                    {isPaused ? <Mic className="w-4 sm:w-5 h-4 sm:h-5 text-pink-400" /> : <Pause className="w-4 sm:w-5 h-4 sm:h-5 fill-current" />}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={stopAndSend}
-                    className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 active:scale-95 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0"
-                    title="Send voice message"
-                    aria-label="Send voice message"
-                  >
-                    <Send className="w-4 sm:w-5 h-4 sm:h-5" />
-                  </button>
-                </div>
-              </div>
-            ) : (
-              /* Hold-to-record Floating Bar */
-              <div className="relative flex items-center justify-between w-full p-2 bg-slate-900/95 rounded-2xl border border-slate-700/60 shadow-xl backdrop-blur-md">
-                <div
-                  className={`absolute -top-12 right-2 px-3 py-1.5 rounded-xl bg-slate-800/90 border border-slate-700 text-xs flex items-center gap-1.5 transition-all shadow-lg ${
-                    isNearLock ? 'text-pink-400 scale-105 border-pink-500/50' : 'text-slate-400'
-                  }`}
-                >
-                  <Lock className="w-3.5 h-3.5" />
-                  <span>Slide up to lock</span>
-                </div>
-
-                <div className="flex items-center gap-2 px-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse motion-reduce:animate-none" />
-                  <span className="font-mono text-xs sm:text-sm font-bold text-white">
-                    {formatRecordingTime(recordDuration)}
+          {isRecording ? (
+            /* Premium Rounded Voice Recording Bottom Sheet */
+            <div className="liquid-sheet-enter liquid-glass-sheet rounded-[26px] p-4 mb-1.5 flex flex-col gap-3.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`w-2.5 h-2.5 rounded-full ${
+                      isPaused ? 'bg-amber-400' : 'bg-rose-500 animate-pulse motion-reduce:animate-none'
+                    }`}
+                  />
+                  <span className="text-[13px] font-semibold text-[#38323F] dark:text-[#F1F5F9]">
+                    Voice Recording
                   </span>
                 </div>
+                <span className="font-mono text-[14px] font-semibold tabular-nums text-[#7960BC] dark:text-[#9880D9]">
+                  {formatRecordingTime(recordDuration)}
+                </span>
+              </div>
 
-                <div
-                  className={`flex items-center gap-1.5 sm:gap-2 transition-all ${
-                    isCanceling ? 'text-rose-400 font-semibold scale-105' : 'text-slate-400 text-[11px] sm:text-xs'
-                  }`}
-                >
-                  <Trash2 className="w-3.5 sm:w-4 h-3.5 sm:h-4" />
-                  <span>{isCanceling ? 'Release to cancel' : '< Slide to cancel'}</span>
-                </div>
-
-                <div className="flex items-center gap-1.5 sm:gap-2">
+              {/* Live Waveform */}
+              <div className="flex items-center justify-center gap-1.5 h-9 px-3 rounded-2xl bg-[#F5F0FA]/80 dark:bg-[#0F172A]/60">
+                {audioLevels.map((lvl, idx) => (
                   <div
-                    onPointerMove={handlePointerMove}
-                    onPointerUp={handlePointerUp}
-                    onPointerCancel={handlePointerCancel}
-                    onClick={stopAndSend}
-                    className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-600 text-white shadow-lg shadow-rose-500/30 scale-105 animate-pulse motion-reduce:animate-none cursor-pointer shrink-0 min-w-[44px] min-h-[44px] flex items-center justify-center"
-                    title="Release or tap to send"
+                    key={idx}
+                    style={{ height: `${Math.max(18, Math.round(lvl * 100))}%` }}
+                    className={`w-1 rounded-full transition-all duration-75 ${
+                      isPaused ? 'bg-[#93889D]/40' : 'bg-[#7960BC] dark:bg-[#9880D9]'
+                    }`}
+                  />
+                ))}
+              </div>
+
+              {isLocked ? (
+                <div className="flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={cancelRecording}
+                    className="min-w-[44px] min-h-[44px] rounded-full bg-rose-500/10 hover:bg-rose-500/20 text-rose-600 dark:text-rose-400 active:scale-95 transition-transform flex items-center justify-center cursor-pointer"
+                    title="Discard recording"
+                    aria-label="Discard recording"
                   >
-                    <Mic className="w-5 h-5" />
+                    <Trash2 className="w-5 h-5" />
+                  </button>
+
+                  <div className="flex items-center gap-2">
+                    {isPaused && (
+                      <button
+                        type="button"
+                        onClick={togglePreview}
+                        className="min-w-[44px] min-h-[44px] rounded-full bg-[#F5F0FA] dark:bg-[#1E293B] text-[#7960BC] dark:text-[#F1F5F9] active:scale-95 transition-transform flex items-center justify-center cursor-pointer"
+                        title={isPlayingPreview ? 'Pause preview' : 'Listen to recording'}
+                        aria-label={isPlayingPreview ? 'Pause preview' : 'Listen to recording'}
+                      >
+                        {isPlayingPreview ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current ml-0.5" />}
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={isPaused ? resumeRecording : pauseRecording}
+                      className="min-w-[44px] min-h-[44px] rounded-full bg-[#F5F0FA] dark:bg-[#1E293B] text-[#38323F] dark:text-[#F1F5F9] active:scale-95 transition-transform flex items-center justify-center cursor-pointer"
+                      title={isPaused ? 'Resume recording' : 'Pause recording'}
+                      aria-label={isPaused ? 'Resume recording' : 'Pause recording'}
+                    >
+                      {isPaused ? <Mic className="w-5 h-5 text-[#7960BC]" /> : <Pause className="w-4 h-4 fill-current" />}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={stopAndSend}
+                      className="liquid-glass-gradient-btn min-w-[44px] min-h-[44px] px-4 rounded-full active:scale-95 text-white font-semibold text-xs flex items-center justify-center gap-1.5 transition-transform cursor-pointer"
+                      title="Send voice message"
+                      aria-label="Send voice message"
+                    >
+                      <Send className="w-4 h-4" />
+                      <span>Send</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="relative flex items-center justify-between gap-2">
+                  <div
+                    className={`absolute -top-14 right-0 px-3 py-1.5 rounded-full liquid-glass-pill text-xs flex items-center gap-1.5 transition-transform ${
+                      isNearLock ? 'text-[#7960BC] scale-105' : 'text-[#93889D]'
+                    }`}
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    <span>Slide up to lock</span>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={stopAndSend}
-                    className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0"
-                    title="Send voice message"
-                    aria-label="Send voice message"
+                  <div
+                    className={`flex items-center gap-1.5 text-xs transition-colors ${
+                      isCanceling ? 'text-rose-600 font-semibold' : 'text-[#93889D] dark:text-[#94A3B8]'
+                    }`}
                   >
-                    <Send className="w-4 sm:w-5 h-4 sm:h-5" />
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        ) : (
-          <form
-            onSubmit={handleSubmit}
-            className="px-2.5 sm:px-3.5 py-2 flex items-end gap-1.5"
-          >
-            {/* Photo Attachment Menu Trigger & Popover */}
-            <div className="relative shrink-0" ref={attachMenuRef}>
-              <button
-                type="button"
-                onClick={() => setIsAttachMenuOpen((prev) => !prev)}
-                className="min-w-[44px] min-h-[44px] flex items-center justify-center cursor-pointer"
-                title="Attach media"
-                aria-label="Attach media"
-              >
-                <span
-                  className={`w-10 h-10 rounded-full border flex items-center justify-center transition-colors ${
-                    isAttachMenuOpen
-                      ? 'bg-[#6848D8]/20 border-[#6848D8]/60 text-[#9B80F8]'
-                      : 'bg-[#111827] hover:bg-[#1E293B] border-white/[0.08] text-[#94A3B8] hover:text-[#F1F5F9]'
-                  }`}
-                >
-                  <ImageIcon className="w-[18px] h-[18px]" />
-                </span>
-              </button>
+                    <Trash2 className="w-4 h-4" />
+                    <span>{isCanceling ? 'Release to cancel' : 'Slide left to cancel'}</span>
+                  </div>
 
-              {isAttachMenuOpen && (
-                <div className="absolute bottom-full left-0 mb-2 w-52 p-1.5 rounded-2xl bg-slate-900/95 border border-slate-800 shadow-2xl backdrop-blur-md z-30 flex flex-col gap-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsAttachMenuOpen(false);
-                      imageInputRef.current?.click();
-                    }}
-                    className="w-full px-3 py-2.5 rounded-xl hover:bg-slate-800/80 text-slate-200 hover:text-white flex items-center gap-2.5 text-xs font-semibold transition-colors cursor-pointer text-left"
-                  >
-                    <div className="w-7 h-7 rounded-lg bg-pink-500/20 text-pink-400 flex items-center justify-center shrink-0">
-                      <ImageIcon className="w-4 h-4" />
+                  <div className="flex items-center gap-2">
+                    <div
+                      onPointerMove={handlePointerMove}
+                      onPointerUp={handlePointerUp}
+                      onPointerCancel={handlePointerCancel}
+                      onClick={stopAndSend}
+                      className="w-11 h-11 rounded-full bg-[#7960BC] text-white shadow-md flex items-center justify-center cursor-pointer active:scale-95"
+                      title="Release or tap to send"
+                    >
+                      <Mic className="w-5 h-5" />
                     </div>
-                    <span>Choose from Gallery</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsAttachMenuOpen(false);
-                      setIsCameraModalOpen(true);
-                    }}
-                    className="w-full px-3 py-2.5 rounded-xl hover:bg-slate-800/80 text-slate-200 hover:text-white flex items-center gap-2.5 text-xs font-semibold transition-colors cursor-pointer text-left"
-                  >
-                    <div className="w-7 h-7 rounded-lg bg-indigo-500/20 text-indigo-400 flex items-center justify-center shrink-0">
-                      <Camera className="w-4 h-4" />
-                    </div>
-                    <span>Take Photo</span>
-                  </button>
+                  </div>
                 </div>
               )}
             </div>
+          ) : (
+            <form
+              onSubmit={handleSubmit}
+              className="pb-2 flex items-end gap-2"
+            >
+              {/* 48x48 Circular Liquid Glass Plus Button & Floating Menu */}
+              <div className="relative shrink-0" ref={attachMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setIsAttachMenuOpen((prev) => !prev)}
+                  className="liquid-glass-circle w-12 h-12 rounded-full flex items-center justify-center text-[#38323F] dark:text-[#F1F5F9] active:scale-90 transition-transform duration-150 ease-[cubic-bezier(0.32,0.72,0,1)] cursor-pointer"
+                  title="Attach media"
+                  aria-label="Attach media"
+                >
+                  <Plus
+                    className={`w-6 h-6 transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] ${
+                      isAttachMenuOpen ? 'rotate-45 text-[#9880D9]' : ''
+                    }`}
+                  />
+                </button>
 
-            <input
-              ref={imageInputRef}
-              type="file"
-              accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
-              multiple
-              onChange={handleImageInputChange}
-              className="hidden"
-            />
+                {isAttachMenuOpen && (
+                  <div className="liquid-menu-enter liquid-glass-sheet absolute bottom-full left-0 mb-2.5 w-56 p-2 rounded-2xl z-30 flex flex-col gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAttachMenuOpen(false);
+                        imageInputRef.current?.click();
+                      }}
+                      className="w-full px-3 py-2.5 min-h-[44px] rounded-xl hover:bg-[#9880D9]/15 text-[#38323F] dark:text-[#F1F5F9] flex items-center gap-3 text-[14px] font-medium transition-colors cursor-pointer text-left"
+                    >
+                      <div className="w-8 h-8 rounded-full bg-[#9880D9]/20 text-[#7960BC] dark:text-[#C4B5FD] flex items-center justify-center shrink-0">
+                        <ImageIcon className="w-[18px] h-[18px]" />
+                      </div>
+                      <span>Choose from Gallery</span>
+                    </button>
 
-            <textarea
-              ref={messageInputRef}
-              rows={1}
-              placeholder="Message..."
-              value={inputText}
-              onChange={handleInputChange}
-              onKeyDown={handleKeyDown}
-              className="flex-grow min-w-0 px-4 py-2.5 rounded-[20px] bg-[#111827] border border-white/[0.07] text-[#F1F5F9] placeholder-[#94A3B8] text-base md:text-[15px] focus:outline-none focus:border-[#6848D8] transition-colors resize-none max-h-[120px] leading-snug my-0.5"
-            />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAttachMenuOpen(false);
+                        setIsCameraModalOpen(true);
+                      }}
+                      className="w-full px-3 py-2.5 min-h-[44px] rounded-xl hover:bg-[#9880D9]/15 text-[#38323F] dark:text-[#F1F5F9] flex items-center gap-3 text-[14px] font-medium transition-colors cursor-pointer text-left"
+                    >
+                      <div className="w-8 h-8 rounded-full bg-[#F472B6]/20 text-[#D4537E] dark:text-[#F9A8D4] flex items-center justify-center shrink-0">
+                        <Camera className="w-[18px] h-[18px]" />
+                      </div>
+                      <span>Take Photo</span>
+                    </button>
+                  </div>
+                )}
+              </div>
 
-            {inputText.trim() ? (
-              <button
-                type="submit"
-                className="min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0 cursor-pointer"
-                title="Send message"
-                aria-label="Send message"
-              >
-                <span className="w-10 h-10 rounded-full bg-[#6848D8] hover:bg-[#5B3CC8] active:scale-95 text-white transition-transform flex items-center justify-center">
-                  <Send className="w-[18px] h-[18px] translate-x-[0.5px]" />
-                </span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                onPointerDown={handlePointerDown}
-                className="min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0 touch-none select-none cursor-pointer"
-                title="Tap to record hands-free, hold to speak"
-                aria-label="Record voice message"
-              >
-                <span className="w-10 h-10 rounded-full bg-[#111827] hover:bg-[#1E293B] border border-white/[0.08] active:scale-95 active:bg-[#6848D8] text-[#94A3B8] hover:text-[#F1F5F9] transition-transform flex items-center justify-center">
-                  <Mic className="w-[18px] h-[18px]" />
-                </span>
-              </button>
-            )}
-          </form>
-        )}
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+                multiple
+                onChange={handleImageInputChange}
+                className="hidden"
+              />
+
+              {/* 50px+ Soft Translucent Liquid Glass Message Input */}
+              <div className="liquid-glass-pill flex-grow min-w-0 min-h-[50px] rounded-[26px] flex items-center px-4 py-2">
+                <textarea
+                  ref={messageInputRef}
+                  rows={1}
+                  placeholder="Message"
+                  value={inputText}
+                  onChange={handleInputChange}
+                  onKeyDown={handleKeyDown}
+                  className="w-full bg-transparent text-[#38323F] dark:text-white placeholder-[#93889D] dark:placeholder-[#9E90B0] text-[16px] leading-[22px] focus:outline-none resize-none max-h-[128px] py-1"
+                />
+              </div>
+
+              {/* 48x48 Circular Liquid Glass Microphone / Send Control */}
+              {inputText.trim() ? (
+                <button
+                  type="submit"
+                  className="liquid-glass-send w-12 h-12 rounded-full text-white active:scale-90 transition-transform duration-150 ease-[cubic-bezier(0.32,0.72,0,1)] flex items-center justify-center shrink-0 cursor-pointer"
+                  title="Send message"
+                  aria-label="Send message"
+                >
+                  <Send className="w-6 h-6 translate-x-[0.5px]" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onPointerDown={handlePointerDown}
+                  className="liquid-glass-gradient-btn w-12 h-12 rounded-full text-white active:scale-90 transition-transform duration-150 ease-[cubic-bezier(0.32,0.72,0,1)] flex items-center justify-center shrink-0 touch-none select-none cursor-pointer"
+                  title="Tap to record hands-free, hold to speak"
+                  aria-label="Record voice message"
+                >
+                  <Mic className="w-6 h-6" />
+                </button>
+              )}
+            </form>
+          )}
+        </div>
       </div>
 
       {/* Live Camera Capture Modal */}

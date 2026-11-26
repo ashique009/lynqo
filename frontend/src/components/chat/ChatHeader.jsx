@@ -1,69 +1,69 @@
 import React from 'react';
-import { ArrowLeft, WifiOff } from 'lucide-react';
+import { ChevronLeft, WifiOff } from 'lucide-react';
 import { getOptimizedImageUrl } from '../../utils/imageUtils';
 
 export const ChatHeader = React.memo(({ otherUser, otherUserTyping, isWsConnected, onBack }) => {
   return (
-    <header className="px-2 sm:px-4 py-1.5 bg-[#080C14]/95 backdrop-blur-md border-b border-white/[0.06] flex items-center justify-between gap-2 shrink-0 pt-safe z-20">
-      <div className="flex items-center gap-1 sm:gap-2 min-w-0">
+    <header className="bg-[#110B1E]/75 backdrop-blur-md px-3 sm:px-4 pt-safe pb-3 shrink-0 z-20 transition-colors border-b border-white/[0.08]">
+      <div className="h-12 flex items-center justify-between gap-2 relative">
+        {/* Left: Circular Liquid Glass Back Button */}
         <button
           type="button"
           onClick={onBack}
-          className="min-w-[44px] min-h-[44px] rounded-full text-[#94A3B8] hover:text-[#F1F5F9] hover:bg-[#111827] active:scale-95 transition-transform flex items-center justify-center shrink-0 cursor-pointer"
+          className="liquid-glass-circle w-11 h-11 rounded-full text-white active:scale-95 transition-transform flex items-center justify-center shrink-0 cursor-pointer z-10"
           aria-label="Back to dashboard"
         >
-          <ArrowLeft className="w-5 h-5" />
+          <ChevronLeft className="w-5 h-5 -ml-0.5" />
         </button>
 
-        <div className="relative w-9 h-9 rounded-full overflow-hidden bg-[#1E293B] border border-white/[0.08] shrink-0">
-          {otherUser?.profile_picture ? (
-            <img
-              src={getOptimizedImageUrl(otherUser.profile_picture, { width: 88, height: 88 })}
-              alt=""
-              className="w-full h-full object-cover"
-              loading="lazy"
-              decoding="async"
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center font-semibold text-sm text-[#F472B6] bg-[#6848D8]/20">
-              {otherUser?.display_name?.charAt(0) || 'U'}
-            </div>
-          )}
-          {otherUser?.is_online && (
-            <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-[#080C14] rounded-full" />
-          )}
-        </div>
-
-        <div className="min-w-0 pl-1">
-          <div className="flex items-center gap-1.5">
-            <h3 className="font-semibold text-[15px] leading-tight text-[#F1F5F9] truncate max-w-[160px] sm:max-w-[240px]">
-              {otherUser?.display_name || 'Chat'}
-            </h3>
-            {otherUser?.profile_id && (
-              <span className="hidden sm:inline font-mono text-[10px] text-[#94A3B8] shrink-0">
-                {otherUser.profile_id}
-              </span>
-            )}
-          </div>
-          <div className="text-[11px] leading-tight text-[#94A3B8] flex items-center gap-1.5 mt-0.5">
+        {/* Center: Centered Username & Online Status */}
+        <div className="absolute inset-x-14 flex flex-col items-center justify-center text-center pointer-events-none">
+          <h3 className="font-semibold text-[17px] leading-tight text-white truncate max-w-[200px] sm:max-w-[280px]">
+            {otherUser?.display_name || 'Chat'}
+          </h3>
+          <div className="text-[12px] leading-tight text-[#A99BB8] flex items-center gap-1.5 mt-0.5">
             {otherUserTyping ? (
               <span className="text-[#F472B6] font-medium">Typing...</span>
             ) : otherUser?.is_online ? (
-              <span className="text-emerald-400 font-medium">Online</span>
+              <span className="inline-flex items-center gap-1.5 text-emerald-400 font-medium">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
+                Online
+              </span>
             ) : (
               <span>Offline</span>
             )}
           </div>
         </div>
-      </div>
 
-      {/* Unobtrusive Reconnecting Pill */}
-      {!isWsConnected && (
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-300 text-[11px] font-medium shrink-0 mr-1">
-          <WifiOff className="w-3.5 h-3.5 animate-pulse motion-reduce:animate-none" />
-          <span className="hidden sm:inline">Reconnecting</span>
+        {/* Right: Reconnect Indicator & Gradient Profile Avatar */}
+        <div className="flex items-center gap-1.5 z-10">
+          {!isWsConnected && (
+            <div
+              className="flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500/15 border border-amber-500/25 text-amber-300 text-[11px] font-medium shrink-0"
+              title="Reconnecting"
+            >
+              <WifiOff className="w-3.5 h-3.5 animate-pulse motion-reduce:animate-none" />
+              <span className="hidden sm:inline">Reconnecting</span>
+            </div>
+          )}
+
+          <div className="relative w-11 h-11 rounded-full overflow-hidden bg-gradient-to-br from-[#8B68F6] to-[#EC6EB8] border border-white/25 shadow-[0_4px_14px_rgba(139,104,246,0.3)] shrink-0">
+            {otherUser?.profile_picture ? (
+              <img
+                src={getOptimizedImageUrl(otherUser.profile_picture, { width: 88, height: 88 })}
+                alt=""
+                className="w-full h-full object-cover"
+                loading="lazy"
+                decoding="async"
+              />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center font-bold text-base text-white">
+                {otherUser?.display_name?.charAt(0) || 'U'}
+              </div>
+            )}
+          </div>
         </div>
-      )}
+      </div>
     </header>
   );
 });

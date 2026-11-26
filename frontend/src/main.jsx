@@ -27,6 +27,16 @@ if (typeof window !== 'undefined') {
       fn()
     }
   })
+
+  // Adaptive Liquid Glass: detect constrained devices (<= 4GB RAM, <= 4 cores, or Data Saver)
+  try {
+    const mem = navigator.deviceMemory
+    const cores = navigator.hardwareConcurrency
+    const saveData = navigator.connection?.saveData
+    if ((typeof mem === 'number' && mem <= 4) || (typeof cores === 'number' && cores <= 4) || saveData) {
+      document.documentElement.classList.add('lynqo-low-end')
+    }
+  } catch {}
 }
 
 createRoot(document.getElementById('root')).render(

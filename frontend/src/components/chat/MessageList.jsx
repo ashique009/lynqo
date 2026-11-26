@@ -1,24 +1,36 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Send } from 'lucide-react';
 import { SwipeableMessageItem } from '../SwipeableMessageItem';
 
+const INITIAL_RENDER_WINDOW = 250;
+const WINDOW_STEP = 200;
+
+const formatDateLabel = (isoString) => {
+  if (!isoString) return '';
+  const d = new Date(isoString);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diffDays = Math.round((today - target) / 86400000);
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+};
+
 const ChatSkeleton = () => (
-  <div className="space-y-4 p-2 animate-pulse" role="status" aria-label="Loading messages">
+  <div className="space-y-3 p-2 animate-pulse" role="status" aria-label="Loading messages">
     <div className="flex flex-col items-start space-y-1">
-      <div className="h-10 w-44 sm:w-52 rounded-2xl rounded-bl-xs bg-slate-800/70 border border-slate-700/40" />
-      <div className="h-3 w-14 bg-slate-800/40 rounded-full ml-1" />
+      <div className="h-10 w-44 sm:w-52 rounded-[20px] rounded-bl-[5px] bg-white/80 dark:bg-slate-800/70" />
     </div>
     <div className="flex flex-col items-end space-y-1">
-      <div className="h-12 w-52 sm:w-64 rounded-2xl rounded-br-xs bg-gradient-to-r from-pink-500/20 to-indigo-600/20 border border-pink-500/10" />
-      <div className="h-3 w-12 bg-slate-800/40 rounded-full mr-1" />
+      <div className="h-12 w-52 sm:w-64 rounded-[20px] rounded-br-[5px] bg-[#9880D9]/25 dark:bg-indigo-600/20" />
     </div>
     <div className="flex flex-col items-start space-y-1">
-      <div className="h-14 w-60 sm:w-72 rounded-2xl rounded-bl-xs bg-slate-800/70 border border-slate-700/40" />
-      <div className="h-3 w-16 bg-slate-800/40 rounded-full ml-1" />
+      <div className="h-14 w-60 sm:w-72 rounded-[20px] rounded-bl-[5px] bg-white/80 dark:bg-slate-800/70" />
     </div>
     <div className="flex flex-col items-end space-y-1">
-      <div className="h-10 w-36 sm:w-44 rounded-2xl rounded-br-xs bg-gradient-to-r from-pink-500/20 to-indigo-600/20 border border-pink-500/10" />
-      <div className="h-3 w-12 bg-slate-800/40 rounded-full mr-1" />
+      <div className="h-10 w-36 sm:w-44 rounded-[20px] rounded-br-[5px] bg-[#9880D9]/25 dark:bg-indigo-600/20" />
     </div>
   </div>
 );
@@ -50,14 +62,26 @@ export const MessageList = React.memo(({
   onTouchEnd,
   onContextMenu,
 }) => {
+  const [renderLimit, setRenderLimit] = useState(INITIAL_RENDER_WINDOW);
+
+  // Keep render window bounded on long conversations while allowing upward expansion
+  useEffect(() => {
+    if (messages.length <= INITIAL_RENDER_WINDOW && renderLimit !== INITIAL_RENDER_WINDOW) {
+      setRenderLimit(INITIAL_RENDER_WINDOW);
+    }
+  }, [messages.length, renderLimit]);
+
+  const hiddenCount = Math.max(0, messages.length - renderLimit);
+  const visibleMessages = hiddenCount > 0 ? messages.slice(hiddenCount) : messages;
+
   return (
     <div
       ref={chatContainerRef}
       onScroll={onScroll}
-      className="flex-grow px-3 sm:px-4 md:px-6 py-3 overflow-y-auto overflow-x-hidden bg-[#080C14] relative min-h-0 overscroll-contain"
+      className="flex-grow rounded-t-[24px] z-10 px-3 sm:px-4 md:px-6 pt-4 pb-28 overflow-y-auto overflow-x-hidden bg-transparent relative min-h-0 overscroll-contain"
     >
       {loadingOlder && (
-        <div className="py-2 text-center text-xs text-[#94A3B8]">
+        <div className="py-2 text-center text-xs text-[#93889D] dark:text-[#94A3B8]">
           Loading older messages...
         </div>
       )}
@@ -65,63 +89,93 @@ export const MessageList = React.memo(({
       {isLoading && messages.length === 0 ? (
         <ChatSkeleton />
       ) : messages.length === 0 ? (
-        <div className="h-full flex flex-col items-center justify-center text-center text-[#94A3B8] space-y-2 py-8">
-          <div className="w-12 h-12 rounded-2xl bg-[#111827] border border-white/[0.08] text-[#7957F5] flex items-center justify-center">
+        <div className="h-full flex flex-col items-center justify-center text-center text-[#93889D] dark:text-[#94A3B8] space-y-2 py-8">
+          <div className="w-12 h-12 rounded-2xl bg-white dark:bg-[#111827] border border-black/[0.05] dark:border-white/[0.08] text-[#7960BC] dark:text-[#7957F5] flex items-center justify-center shadow-xs">
             <Send className="w-5 h-5" />
           </div>
-          <p className="text-sm font-semibold text-[#F1F5F9]">No messages yet</p>
+          <p className="text-sm font-semibold text-[#38323F] dark:text-[#F1F5F9]">No messages yet</p>
           <p className="text-xs">Send a message to say hello to {otherUser?.display_name}!</p>
         </div>
       ) : (
-        messages.map((msg, index) => {
+        <>
+          {hiddenCount > 0 && (
+            <div className="flex justify-center my-2">
+              <button
+                type="button"
+                onClick={() => setRenderLimit((prev) => prev + WINDOW_STEP)}
+                className="px-3.5 py-1.5 rounded-full bg-[#241B35]/80 hover:bg-[#2F2445] border border-white/15 text-[12px] font-medium text-[#D8CCF0] transition-colors cursor-pointer"
+              >
+                Show {Math.min(hiddenCount, WINDOW_STEP)} earlier messages ({hiddenCount} hidden)
+              </button>
+            </div>
+          )}
+          {visibleMessages.map((msg, index) => {
           const isMe = msg.sender_profile_id === currentProfileId;
           const isEditing = editingMessageId === msg.id;
-          const prevMsg = index > 0 ? messages[index - 1] : null;
-          const nextMsg = index < messages.length - 1 ? messages[index + 1] : null;
+          const prevMsg = index > 0 ? visibleMessages[index - 1] : null;
+          const nextMsg = index < visibleMessages.length - 1 ? visibleMessages[index + 1] : null;
+
+          const curTs = msg.created_at ? Date.parse(msg.created_at) : 0;
+          const prevTs = prevMsg?.created_at ? Date.parse(prevMsg.created_at) : 0;
+          const nextTs = nextMsg?.created_at ? Date.parse(nextMsg.created_at) : 0;
+
+          const curDayKey = msg.created_at ? msg.created_at.slice(0, 10) : '';
+          const prevDayKey = prevMsg?.created_at ? prevMsg.created_at.slice(0, 10) : '';
+          const showDateSeparator = curDayKey && curDayKey !== prevDayKey;
 
           const sameAsPrev =
             prevMsg &&
+            !showDateSeparator &&
             prevMsg.sender_profile_id === msg.sender_profile_id &&
-            Math.abs(new Date(msg.created_at) - new Date(prevMsg.created_at)) < 120000;
+            Math.abs(curTs - prevTs) < 120000;
           const sameAsNext =
             nextMsg &&
             nextMsg.sender_profile_id === msg.sender_profile_id &&
-            Math.abs(new Date(nextMsg.created_at) - new Date(msg.created_at)) < 120000;
+            Math.abs(nextTs - curTs) < 120000;
 
           return (
-            <SwipeableMessageItem
-              key={msg.client_message_id || msg.id || index}
-              message={msg}
-              isMe={isMe}
-              isFirstInGroup={!sameAsPrev}
-              isLastInGroup={!sameAsNext}
-              isEditing={isEditing}
-              editingText={isEditing ? editingText : ''}
-              setEditingText={setEditingText}
-              handleSaveEdit={handleSaveEdit}
-              handleCancelEdit={handleCancelEdit}
-              handleRetry={handleRetry}
-              handleRetryImage={handleRetryImage}
-              setViewerMessage={setViewerMessage}
-              formatMessageTime={formatMessageTime}
-              onThreeDotClick={onThreeDotClick}
-              onReply={onReply}
-              onJumpToReply={onJumpToReply}
-              onTouchStart={onTouchStart}
-              onTouchMove={onTouchMove}
-              onTouchEnd={onTouchEnd}
-              onContextMenu={onContextMenu}
-            />
+            <React.Fragment key={msg.client_message_id || msg.id || index}>
+              {showDateSeparator && (
+                <div className="flex justify-center my-3">
+                  <span className="px-3.5 py-1 rounded-full bg-[#241B35]/75 border border-white/10 text-[12px] font-medium text-[#C4B8D4] shadow-xs">
+                    {formatDateLabel(msg.created_at)}
+                  </span>
+                </div>
+              )}
+              <SwipeableMessageItem
+                message={msg}
+                isMe={isMe}
+                isFirstInGroup={!sameAsPrev}
+                isLastInGroup={!sameAsNext}
+                isEditing={isEditing}
+                editingText={isEditing ? editingText : ''}
+                setEditingText={setEditingText}
+                handleSaveEdit={handleSaveEdit}
+                handleCancelEdit={handleCancelEdit}
+                handleRetry={handleRetry}
+                handleRetryImage={handleRetryImage}
+                setViewerMessage={setViewerMessage}
+                formatMessageTime={formatMessageTime}
+                onThreeDotClick={onThreeDotClick}
+                onReply={onReply}
+                onJumpToReply={onJumpToReply}
+                onTouchStart={onTouchStart}
+                onTouchMove={onTouchMove}
+                onTouchEnd={onTouchEnd}
+                onContextMenu={onContextMenu}
+              />
+            </React.Fragment>
           );
-        })
+        })}
+        </>
       )}
 
       {/* Real-time typing bubble */}
       {otherUserTyping && (
-        <div className="mt-2 flex items-center gap-1.5 px-3.5 py-2.5 rounded-[20px] rounded-bl-[6px] bg-[#1E293B] border border-white/[0.06] text-[#94A3B8] text-xs w-16">
-          <span className="w-1.5 h-1.5 bg-[#94A3B8] rounded-full animate-bounce [animation-delay:-0.3s] motion-reduce:animate-none" />
-          <span className="w-1.5 h-1.5 bg-[#94A3B8] rounded-full animate-bounce [animation-delay:-0.15s] motion-reduce:animate-none" />
-          <span className="w-1.5 h-1.5 bg-[#94A3B8] rounded-full animate-bounce motion-reduce:animate-none" />
+        <div className="mt-2.5 flex items-center gap-1.5 px-3.5 py-2.5 rounded-[22px] rounded-bl-[6px] liquid-glass-bubble-in text-[#E9D5FF] text-xs w-16">
+          <span className="w-1.5 h-1.5 bg-[#E9D5FF] rounded-full animate-bounce [animation-delay:-0.3s] motion-reduce:animate-none" />
+          <span className="w-1.5 h-1.5 bg-[#E9D5FF] rounded-full animate-bounce [animation-delay:-0.15s] motion-reduce:animate-none" />
+          <span className="w-1.5 h-1.5 bg-[#E9D5FF] rounded-full animate-bounce motion-reduce:animate-none" />
         </div>
       )}
 

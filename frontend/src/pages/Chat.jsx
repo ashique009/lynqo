@@ -994,7 +994,7 @@ export const Chat = () => {
   const otherUser = conversation?.other_participant;
 
   return (
-    <div className="flex flex-col h-full md:h-[calc(100vh-8rem)] w-full max-w-4xl mx-auto md:rounded-3xl bg-[#080C14] md:border md:border-white/[0.08] shadow-2xl overflow-hidden relative">
+    <div className="flex flex-col h-full md:h-[calc(100vh-8rem)] w-full max-w-4xl mx-auto md:rounded-3xl chat-liquid-bg md:border md:border-black/[0.06] dark:md:border-white/[0.1] shadow-xl overflow-hidden relative">
       <ChatHeader
         otherUser={otherUser}
         otherUserTyping={otherUserTyping}
@@ -1047,20 +1047,20 @@ export const Chat = () => {
         messageInputRef={messageInputRef}
       />
 
-      {/* Floating Action Menu */}
+      {/* Floating Liquid Glass Context Menu */}
       {activeMenuMessage && menuPosition && (
         <div
           style={{ top: `${menuPosition.y}px`, left: `${menuPosition.x}px` }}
-          className="fixed z-50 min-w-[150px] bg-slate-900/95 border border-slate-700/80 rounded-xl shadow-2xl py-1 text-xs text-slate-200 backdrop-blur-md"
+          className="lynqo-modal-enter liquid-glass-sheet fixed z-50 min-w-[164px] rounded-2xl py-1.5 text-[13px] text-[#38323F] dark:text-[#F1F5F9]"
           onClick={(e) => e.stopPropagation()}
         >
           {!activeMenuMessage.is_deleted && (
             <button
               type="button"
               onClick={() => handleStartReply(activeMenuMessage)}
-              className="w-full px-3.5 py-2 text-left hover:bg-slate-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+              className="w-full px-3.5 py-2.5 text-left hover:bg-[#9880D9]/15 flex items-center gap-2.5 cursor-pointer transition-colors"
             >
-              <Reply className="w-3.5 h-3.5 text-pink-400" />
+              <Reply className="w-4 h-4 text-[#7960BC] dark:text-[#9880D9]" />
               <span>Reply</span>
             </button>
           )}
@@ -1069,9 +1069,9 @@ export const Chat = () => {
             <button
               type="button"
               onClick={() => handleCopyMessage(activeMenuMessage)}
-              className="w-full px-3.5 py-2 text-left hover:bg-slate-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+              className="w-full px-3.5 py-2.5 text-left hover:bg-[#9880D9]/15 flex items-center gap-2.5 cursor-pointer transition-colors"
             >
-              <Copy className="w-3.5 h-3.5 text-slate-400" />
+              <Copy className="w-4 h-4 text-[#93889D] dark:text-[#94A3B8]" />
               <span>Copy</span>
             </button>
           )}
@@ -1082,9 +1082,9 @@ export const Chat = () => {
               <button
                 type="button"
                 onClick={() => handleStartEdit(activeMenuMessage)}
-                className="w-full px-3.5 py-2 text-left hover:bg-slate-800 flex items-center gap-2.5 cursor-pointer transition-colors"
+                className="w-full px-3.5 py-2.5 text-left hover:bg-[#9880D9]/15 flex items-center gap-2.5 cursor-pointer transition-colors"
               >
-                <Edit2 className="w-3.5 h-3.5 text-pink-400" />
+                <Edit2 className="w-4 h-4 text-[#7960BC] dark:text-[#9880D9]" />
                 <span>Edit</span>
               </button>
             )}
@@ -1093,9 +1093,9 @@ export const Chat = () => {
             <button
               type="button"
               onClick={() => handlePromptDelete(activeMenuMessage)}
-              className="w-full px-3.5 py-2 text-left hover:bg-rose-500/10 text-rose-400 flex items-center gap-2.5 cursor-pointer transition-colors"
+              className="w-full px-3.5 py-2.5 text-left hover:bg-rose-500/10 text-rose-600 dark:text-rose-400 flex items-center gap-2.5 cursor-pointer transition-colors"
             >
-              <Trash2 className="w-3.5 h-3.5" />
+              <Trash2 className="w-4 h-4" />
               <span>Delete...</span>
             </button>
           )}
