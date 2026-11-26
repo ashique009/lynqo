@@ -4,17 +4,18 @@ import { getOptimizedImageUrl } from '../../utils/imageUtils';
 
 export const ChatHeader = React.memo(({ otherUser, otherUserTyping, isWsConnected, onBack }) => {
   return (
-    <div className="px-4 md:px-5 py-3 md:py-3.5 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between gap-3 sm:gap-4 shrink-0 pt-safe">
-      <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+    <header className="px-2 sm:px-4 py-1.5 bg-[#080C14]/95 backdrop-blur-md border-b border-white/[0.06] flex items-center justify-between gap-2 shrink-0 pt-safe z-20">
+      <div className="flex items-center gap-1 sm:gap-2 min-w-0">
         <button
+          type="button"
           onClick={onBack}
-          className="p-2 -ml-1 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors shrink-0"
+          className="min-w-[44px] min-h-[44px] rounded-full text-[#94A3B8] hover:text-[#F1F5F9] hover:bg-[#111827] active:scale-95 transition-transform flex items-center justify-center shrink-0 cursor-pointer"
           aria-label="Back to dashboard"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
 
-        <div className="relative w-10 h-10 sm:w-11 sm:h-11 rounded-xl overflow-hidden bg-slate-800 border border-slate-700 shrink-0">
+        <div className="relative w-9 h-9 rounded-full overflow-hidden bg-[#1E293B] border border-white/[0.08] shrink-0">
           {otherUser?.profile_picture ? (
             <img
               src={getOptimizedImageUrl(otherUser.profile_picture, { width: 88, height: 88 })}
@@ -24,27 +25,29 @@ export const ChatHeader = React.memo(({ otherUser, otherUserTyping, isWsConnecte
               decoding="async"
             />
           ) : (
-            <div className="w-full h-full flex items-center justify-center font-bold text-base sm:text-lg text-pink-400 bg-pink-500/10">
+            <div className="w-full h-full flex items-center justify-center font-semibold text-sm text-[#F472B6] bg-[#6848D8]/20">
               {otherUser?.display_name?.charAt(0) || 'U'}
             </div>
           )}
           {otherUser?.is_online && (
-            <span className="absolute bottom-0.5 right-0.5 w-2.5 h-2.5 bg-emerald-500 border-2 border-slate-900 rounded-full" />
+            <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-[#080C14] rounded-full" />
           )}
         </div>
 
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5 sm:gap-2">
-            <h3 className="font-bold text-sm text-white truncate max-w-[130px] sm:max-w-[200px]">
+        <div className="min-w-0 pl-1">
+          <div className="flex items-center gap-1.5">
+            <h3 className="font-semibold text-[15px] leading-tight text-[#F1F5F9] truncate max-w-[160px] sm:max-w-[240px]">
               {otherUser?.display_name || 'Chat'}
             </h3>
-            <span className="font-mono text-[10px] sm:text-xs text-pink-400 font-semibold shrink-0">
-              {otherUser?.profile_id}
-            </span>
+            {otherUser?.profile_id && (
+              <span className="hidden sm:inline font-mono text-[10px] text-[#94A3B8] shrink-0">
+                {otherUser.profile_id}
+              </span>
+            )}
           </div>
-          <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
+          <div className="text-[11px] leading-tight text-[#94A3B8] flex items-center gap-1.5 mt-0.5">
             {otherUserTyping ? (
-              <span className="text-pink-400 font-medium animate-pulse">Typing...</span>
+              <span className="text-[#F472B6] font-medium">Typing...</span>
             ) : otherUser?.is_online ? (
               <span className="text-emerald-400 font-medium">Online</span>
             ) : (
@@ -54,14 +57,14 @@ export const ChatHeader = React.memo(({ otherUser, otherUserTyping, isWsConnecte
         </div>
       </div>
 
-      {/* Reconnect Status Banner */}
+      {/* Unobtrusive Reconnecting Pill */}
       {!isWsConnected && (
-        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs shrink-0">
-          <WifiOff className="w-3.5 h-3.5 animate-pulse" />
-          <span className="hidden sm:inline">Reconnecting...</span>
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-300 text-[11px] font-medium shrink-0 mr-1">
+          <WifiOff className="w-3.5 h-3.5 animate-pulse motion-reduce:animate-none" />
+          <span className="hidden sm:inline">Reconnecting</span>
         </div>
       )}
-    </div>
+    </header>
   );
 });
 

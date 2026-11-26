@@ -3,18 +3,26 @@ import { Outlet, useLocation } from 'react-router-dom';
 import Navbar from '../components/Navbar';
 import Sidebar from '../components/Sidebar';
 import BottomNavigation from '../components/BottomNavigation';
+import { useVisualViewport } from '../hooks/useVisualViewport';
 
 export const MainLayout = () => {
   const location = useLocation();
   const isChatRoute = location.pathname.startsWith('/chat/');
+  const { viewportHeight } = useVisualViewport(isChatRoute);
 
   return (
-    <div className={`min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-pink-500 selection:text-white ${
-      isChatRoute ? 'h-[100dvh] overflow-hidden' : ''
-    }`}>
-      {/* Lightweight ambient radial glows (no expensive GPU blur filter) */}
-      <div className="fixed top-[-20%] right-[-20%] w-[60vw] h-[60vw] rounded-full bg-[radial-gradient(circle,rgba(219,39,119,0.08)_0%,transparent_70%)] pointer-events-none z-0" />
-      <div className="fixed bottom-[-20%] left-[-20%] w-[60vw] h-[60vw] rounded-full bg-[radial-gradient(circle,rgba(79,70,229,0.08)_0%,transparent_70%)] pointer-events-none z-0" />
+    <div
+      style={
+        isChatRoute && viewportHeight
+          ? { height: `${viewportHeight}px` }
+          : undefined
+      }
+      className={`min-h-dvh bg-[#080C14] text-[#F1F5F9] flex flex-col selection:bg-[#7957F5] selection:text-white overflow-x-clip ${
+        isChatRoute ? 'h-[100dvh] overflow-hidden' : ''
+      }`}
+    >
+      {/* Subtle ambient radial accent (zero GPU blur filter) */}
+      <div className="fixed top-[-25%] right-[-20%] w-[55vw] h-[55vw] rounded-full bg-[radial-gradient(circle,rgba(121,87,245,0.06)_0%,transparent_70%)] pointer-events-none z-0" />
 
       {/* Top Navbar: hidden on mobile in active chat to maximize screen space */}
       <div className={isChatRoute ? 'hidden md:block' : ''}>

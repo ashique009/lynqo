@@ -11,6 +11,8 @@ const MAX_SWIPE_OFFSET = 60; // px maximum visual resistance
 export const SwipeableMessageItem = React.memo(({
   message,
   isMe,
+  isFirstInGroup = true,
+  isLastInGroup = true,
   isEditing,
   editingText,
   setEditingText,
@@ -165,11 +167,15 @@ export const SwipeableMessageItem = React.memo(({
     thresholdTriggered.current = false;
   };
 
+  const bubbleShapeClass = isMe
+    ? `rounded-[18px] ${isFirstInGroup ? '' : 'rounded-tr-[6px]'} ${isLastInGroup ? 'rounded-br-[5px]' : 'rounded-br-[6px]'}`
+    : `rounded-[18px] ${isFirstInGroup ? '' : 'rounded-tl-[6px]'} ${isLastInGroup ? 'rounded-bl-[5px]' : 'rounded-bl-[6px]'}`;
+
   return (
     <div
       ref={rowRef}
       id={`msg-${message.id}`}
-      className={`message-row-opt flex flex-col group relative select-text ${isMe ? 'items-end' : 'items-start'}`}
+      className={`message-row-opt flex flex-col group relative select-text ${isFirstInGroup ? 'mt-3' : 'mt-[3px]'} ${isMe ? 'items-end' : 'items-start'}`}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerEnd}
@@ -195,7 +201,7 @@ export const SwipeableMessageItem = React.memo(({
 
       <div
         ref={bubbleWrapRef}
-        className="flex items-center gap-1 max-w-[85%] sm:max-w-[75%]"
+        className="flex items-center gap-1 max-w-[82%] sm:max-w-[72%] min-w-0"
         style={{
           transform: 'translate3d(0px, 0, 0)',
           willChange: 'transform',
@@ -218,10 +224,10 @@ export const SwipeableMessageItem = React.memo(({
         )}
 
         <div
-          className={`px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm break-words relative transition-all ${
+          className={`min-w-0 max-w-full overflow-hidden px-3.5 py-2 text-[15px] leading-[1.38] relative transition-transform duration-150 active:scale-[0.985] ${bubbleShapeClass} ${
             isMe
-              ? 'bg-gradient-to-r from-pink-500 to-indigo-600 text-white rounded-br-xs shadow-pink-500/10'
-              : 'bg-slate-800 border border-slate-700/60 text-slate-100 rounded-bl-xs'
+              ? 'bg-[#6848D8] text-[#F8FAFC]'
+              : 'bg-[#1E293B] border border-white/[0.05] text-[#F1F5F9]'
           }`}
         >
           {/* Quoted Reply Preview Card (Click to Jump) */}
@@ -231,23 +237,23 @@ export const SwipeableMessageItem = React.memo(({
                 e.stopPropagation();
                 onJumpToReply?.(message.reply_to_details.id);
               }}
-              className={`mb-2 p-2 rounded-xl text-xs cursor-pointer transition-all flex items-start gap-2.5 relative overflow-hidden select-none border ${
+              className={`mb-1.5 px-2.5 py-1.5 rounded-xl text-xs cursor-pointer transition-colors flex items-start gap-2 relative overflow-hidden select-none ${
                 isMe
-                  ? 'bg-black/25 border-white/20 hover:bg-black/35 text-white/90'
-                  : 'bg-slate-900/60 border-slate-700/80 hover:bg-slate-900/90 text-slate-200'
+                  ? 'bg-black/20 hover:bg-black/30 text-white/95'
+                  : 'bg-[#0F172A]/70 hover:bg-[#0F172A]/90 text-[#E2E8F0]'
               }`}
               title="Click to jump to original message"
             >
               <div
-                className={`absolute left-0 top-0 bottom-0 w-1 ${
-                  isMe ? 'bg-pink-300' : 'bg-gradient-to-b from-pink-500 to-indigo-500'
+                className={`absolute left-0 top-0 bottom-0 w-[2.5px] ${
+                  isMe ? 'bg-white/60' : 'bg-[#7957F5]'
                 }`}
               />
               <div className="flex-grow pl-1 overflow-hidden min-w-0">
-                <div className="font-semibold text-[11px] truncate text-pink-300">
+                <div className={`font-semibold text-[11px] truncate ${isMe ? 'text-white/95' : 'text-[#F472B6]'}`}>
                   {message.reply_to_details.sender_display_name || message.reply_to_details.sender_profile_id || 'User'}
                 </div>
-                <div className="text-[11px] opacity-85 truncate mt-0.5">
+                <div className="text-[11px] opacity-80 truncate mt-0.5">
                   {message.reply_to_details.is_deleted ? (
                     <span className="italic flex items-center gap-1 opacity-70">
                       <Ban className="w-3 h-3 inline shrink-0" /> This message was deleted
@@ -324,13 +330,13 @@ export const SwipeableMessageItem = React.memo(({
               onRetry={handleRetryImage}
             />
           ) : (
-            <p className="whitespace-pre-wrap">{message.content}</p>
+            <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.content}</p>
           )}
 
           {/* Message Footer (Timestamp & Status Ticks) */}
           <div
-            className={`flex items-center justify-end gap-1 text-[10px] mt-1 ${
-              isMe ? 'text-pink-100/70' : 'text-slate-400'
+            className={`flex items-center justify-end gap-1 text-[10px] tabular-nums mt-1 ${
+              isMe ? 'text-white/75' : 'text-[#94A3B8]'
             }`}
           >
             <span>{formatMessageTime(message.created_at)}</span>
@@ -338,26 +344,26 @@ export const SwipeableMessageItem = React.memo(({
               <span className="italic text-[9px] opacity-80">(edited)</span>
             )}
             {isMe && !message.is_deleted && (
-              <span className="ml-1 inline-flex items-center">
+              <span className="ml-0.5 inline-flex items-center">
                 {message.status === 'failed' ? (
                   <button
                     type="button"
                     onClick={() => handleRetry(message)}
-                    className="inline-flex items-center gap-1 text-rose-300 hover:text-white bg-rose-500/20 hover:bg-rose-500/30 px-1.5 py-0.5 rounded text-[10px] cursor-pointer transition-colors"
+                    className="inline-flex items-center gap-1 text-rose-200 hover:text-white bg-rose-500/25 hover:bg-rose-500/40 px-1.5 py-0.5 rounded text-[10px] cursor-pointer transition-colors"
                     title="Sending failed. Click to retry."
                     aria-label="Retry sending message"
                   >
-                    <AlertCircle className="w-3 h-3 text-rose-400" />
+                    <AlertCircle className="w-3 h-3 text-rose-300" />
                     <span className="font-semibold underline">Retry</span>
                   </button>
                 ) : message.status === 'sending' ? (
-                  <Clock className="w-3 h-3 animate-spin text-pink-200/50" title="Sending..." />
+                  <Clock className="w-3 h-3 animate-spin text-white/60" title="Sending..." />
                 ) : message.status === 'seen' ? (
-                  <CheckCheck className="w-3.5 h-3.5 text-pink-200 font-bold" title="Seen" />
+                  <CheckCheck className="w-3.5 h-3.5 text-sky-300" title="Seen" />
                 ) : message.status === 'delivered' ? (
-                  <CheckCheck className="w-3.5 h-3.5 text-slate-400/80" title="Delivered" />
+                  <CheckCheck className="w-3.5 h-3.5 text-white/75" title="Delivered" />
                 ) : (
-                  <Check className="w-3.5 h-3.5 text-pink-200/60" title="Sent" />
+                  <Check className="w-3.5 h-3.5 text-white/65" title="Sent" />
                 )}
               </span>
             )}

@@ -6,12 +6,13 @@ export const ScrollToBottomButton = React.memo(({ visible, onClick }) => {
 
   return (
     <button
+      type="button"
       onClick={onClick}
-      className="absolute bottom-20 right-6 sm:right-8 p-2.5 rounded-full bg-pink-500 hover:bg-pink-600 text-white shadow-xl transition-all flex items-center gap-1.5 text-xs font-semibold cursor-pointer z-10"
+      className="lynqo-toast-enter absolute bottom-20 right-4 sm:right-6 min-w-[44px] min-h-[44px] px-3 rounded-full bg-[#111827]/95 border border-white/[0.12] hover:bg-[#1E293B] active:scale-95 text-[#F1F5F9] shadow-lg transition-transform flex items-center justify-center gap-1.5 text-xs font-medium cursor-pointer z-20"
       aria-label="Scroll to bottom"
     >
-      <ChevronDown className="w-4 h-4" />
-      <span className="hidden sm:inline">New messages</span>
+      <ChevronDown className="w-4 h-4 text-[#7957F5]" />
+      <span className="hidden sm:inline">Latest</span>
     </button>
   );
 });

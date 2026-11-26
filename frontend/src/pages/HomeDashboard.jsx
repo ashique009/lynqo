@@ -152,11 +152,11 @@ export const HomeDashboard = () => {
   };
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto">
-      {/* Profile Banner */}
-      <div className="p-6 md:p-8 rounded-3xl bg-slate-900/80 border border-slate-800 shadow-xl backdrop-blur-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
-        <div className="flex items-center gap-4">
-          <div className="relative w-16 h-16 rounded-2xl overflow-hidden bg-slate-800 border-2 border-pink-500/30 shrink-0 shadow-md">
+    <div className="space-y-5 max-w-3xl mx-auto">
+      {/* Profile Card */}
+      <div className="p-4 sm:p-6 rounded-2xl bg-[#111827] border border-white/[0.08] flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="relative w-14 h-14 rounded-full overflow-hidden bg-[#1E293B] border border-white/[0.12] shrink-0">
             {profile?.profile_picture ? (
               <img
                 src={getOptimizedImageUrl(profile.profile_picture, { width: 128, height: 128 })}
@@ -166,103 +166,113 @@ export const HomeDashboard = () => {
                 decoding="async"
               />
             ) : (
-              <div className="w-full h-full flex items-center justify-center font-bold text-2xl text-pink-400 bg-pink-500/10">
+              <div className="w-full h-full flex items-center justify-center font-semibold text-xl text-[#F472B6] bg-[#7957F5]/15">
                 {profile?.display_name?.charAt(0) || 'U'}
               </div>
             )}
-            <span className="absolute bottom-1 right-1 w-3.5 h-3.5 bg-emerald-500 border-2 border-slate-900 rounded-full" />
+            <span className="absolute bottom-0.5 right-0.5 w-3 h-3 bg-emerald-500 border-2 border-[#111827] rounded-full" />
           </div>
 
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-xl font-bold text-white">{profile?.display_name}</h2>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-pink-500/10 border border-pink-500/20 text-pink-400">
+              <h2 className="text-lg font-semibold text-[#F1F5F9]">{profile?.display_name}</h2>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
                 Active
               </span>
             </div>
-            <div className="flex items-center gap-2 mt-1">
-              <span className="text-xs text-slate-400 font-mono font-medium">
-                ID: {profile?.profile_id}
+            <div className="flex items-center gap-1 mt-0.5">
+              <span className="text-xs text-[#94A3B8] font-mono">
+                {profile?.profile_id}
               </span>
               <button
+                type="button"
                 onClick={copyId}
-                className="p-1 rounded hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                className="min-w-[44px] min-h-[44px] -my-2 flex items-center justify-center rounded-xl hover:bg-[#1E293B] text-[#94A3B8] hover:text-[#F1F5F9] transition-colors active:scale-95 cursor-pointer"
                 title="Copy Profile ID"
+                aria-label="Copy Profile ID"
               >
-                {copiedId ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                {copiedId ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
               </button>
             </div>
           </div>
         </div>
 
-        {/* Quick Action Buttons */}
+        {/* Quick Action Button */}
         <div className="flex items-center gap-3 w-full sm:w-auto justify-start sm:justify-end">
           <Link
             to="/find"
-            className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 text-white text-xs font-bold shadow-md shadow-pink-500/20 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+            className="flex-1 sm:flex-none min-h-[44px] px-4 py-2.5 rounded-xl bg-[#7957F5] hover:bg-[#6340E0] active:scale-[0.98] text-white text-xs font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
           >
             <UserPlus className="w-4 h-4" />
-            <span>Find & Message</span>
+            <span>New Chat</span>
           </Link>
         </div>
       </div>
 
       {/* Conversations Section Header */}
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
+      <div className="space-y-3">
+        <div className="flex items-center justify-between px-1">
           <div className="flex items-center gap-2">
-            <MessageSquare className="w-5 h-5 text-pink-400" />
-            <h3 className="text-lg font-bold text-white">Your Conversations</h3>
+            <MessageSquare className="w-4 h-4 text-[#7957F5]" />
+            <h3 className="text-base font-semibold text-[#F1F5F9]">Chats</h3>
           </div>
           <Link
             to="/connections"
-            className="text-xs text-slate-400 hover:text-pink-400 transition-colors flex items-center gap-1"
+            className="min-h-[44px] px-2 text-xs text-[#94A3B8] hover:text-[#F1F5F9] transition-colors flex items-center gap-1.5"
           >
             <Users className="w-3.5 h-3.5" />
-            <span>View All Connections</span>
+            <span>Connections</span>
           </Link>
         </div>
 
-        {/* Search Filter */}
+        {/* Search Filter (16px on mobile to prevent iOS zoom) */}
         {conversations.length > 0 && (
           <div className="relative">
-            <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
+            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-[#94A3B8]" />
             <input
               type="text"
-              placeholder="Search conversations..."
+              placeholder="Search chats..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="w-full pl-11 pr-4 py-3 rounded-2xl bg-slate-900/80 border border-slate-800 text-white placeholder-slate-500 text-xs focus:outline-none focus:border-pink-500"
+              className="w-full pl-10 pr-4 py-2.5 min-h-[44px] rounded-xl bg-[#111827] border border-white/[0.08] text-[#F1F5F9] placeholder-[#94A3B8] text-base md:text-sm focus:outline-none focus:border-[#7957F5] transition-colors"
             />
           </div>
         )}
 
         {/* Conversations List */}
         {isLoading ? (
-          <div className="py-16 flex justify-center">
-            <Loader />
+          <div className="space-y-2 animate-pulse" role="status" aria-label="Loading conversations">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="p-3.5 rounded-2xl bg-[#111827] border border-white/[0.06] flex items-center gap-3.5">
+                <div className="w-12 h-12 rounded-full bg-[#1E293B] shrink-0" />
+                <div className="flex-grow space-y-2">
+                  <div className="h-3.5 w-32 bg-[#1E293B] rounded-full" />
+                  <div className="h-3 w-48 bg-[#1E293B]/70 rounded-full" />
+                </div>
+              </div>
+            ))}
           </div>
         ) : conversations.length === 0 ? (
-          <div className="py-16 text-center rounded-3xl bg-slate-900/40 border border-slate-800/60 p-8 space-y-4">
-            <div className="w-12 h-12 rounded-2xl bg-slate-800/80 text-slate-500 flex items-center justify-center mx-auto">
+          <div className="py-12 text-center rounded-2xl bg-[#111827] border border-white/[0.08] p-6 space-y-4">
+            <div className="w-12 h-12 rounded-2xl bg-[#1E293B] text-[#7957F5] flex items-center justify-center mx-auto">
               <MessageSquare className="w-6 h-6" />
             </div>
             <div>
-              <h4 className="text-base font-semibold text-slate-300">No active conversations yet</h4>
-              <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
-                Find someone by Profile ID or share your link to start your first chat!
+              <h4 className="text-base font-semibold text-[#F1F5F9]">No chats yet</h4>
+              <p className="text-xs text-[#94A3B8] max-w-sm mx-auto mt-1">
+                Find someone by Profile ID to start your first conversation.
               </p>
             </div>
             <Link
               to="/find"
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-pink-500 text-white text-xs font-bold shadow-md shadow-pink-500/20 hover:bg-pink-600 transition-all cursor-pointer"
+              className="inline-flex items-center justify-center gap-2 min-h-[44px] px-5 py-2.5 rounded-xl bg-[#7957F5] text-white text-xs font-semibold hover:bg-[#6340E0] active:scale-[0.98] transition-all cursor-pointer"
             >
               <UserPlus className="w-4 h-4" />
-              <span>Connect with Someone</span>
+              <span>Find Someone</span>
             </Link>
           </div>
         ) : (
-          <div className="grid gap-2.5">
+          <div className="divide-y divide-white/[0.06] rounded-2xl bg-[#111827] border border-white/[0.08] overflow-hidden">
             {filteredConversations.map((conv) => (
               <div
                 key={conv.id}
@@ -270,10 +280,10 @@ export const HomeDashboard = () => {
                   cacheSet(`conv_detail_${conv.id}`, conv, 120);
                   navigate(`/chat/${conv.id}`, { state: { conversation: conv } });
                 }}
-                className="p-4 rounded-2xl bg-slate-900/80 hover:bg-slate-800/80 border border-slate-800/80 hover:border-slate-700/80 transition-all cursor-pointer flex items-center justify-between gap-4 backdrop-blur-sm group"
+                className="px-4 py-3.5 hover:bg-[#1E293B]/60 active:bg-[#1E293B] transition-colors cursor-pointer flex items-center justify-between gap-3.5 group"
               >
-                <div className="flex items-center gap-3.5 min-w-0">
-                  <div className="relative w-12 h-12 rounded-xl overflow-hidden bg-slate-800 border border-slate-700 shrink-0">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="relative w-12 h-12 rounded-full overflow-hidden bg-[#1E293B] border border-white/[0.08] shrink-0">
                     {conv.other_participant?.profile_picture ? (
                       <img
                         src={getOptimizedImageUrl(conv.other_participant.profile_picture, { width: 96, height: 96 })}
@@ -283,34 +293,34 @@ export const HomeDashboard = () => {
                         decoding="async"
                       />
                     ) : (
-                      <div className="w-full h-full flex items-center justify-center font-bold text-pink-400 bg-pink-500/10">
+                      <div className="w-full h-full flex items-center justify-center font-semibold text-[#F472B6] bg-[#7957F5]/15">
                         {conv.other_participant?.display_name?.charAt(0) || 'U'}
                       </div>
                     )}
                     {conv.other_participant?.is_online && (
-                      <span className="absolute bottom-0.5 right-0.5 w-2.5 h-2.5 bg-emerald-500 border-2 border-slate-900 rounded-full" />
+                      <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-[#111827] rounded-full" />
                     )}
                   </div>
 
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <h4 className="font-bold text-sm text-white group-hover:text-pink-400 transition-colors truncate">
+                      <h4 className="font-semibold text-[15px] text-[#F1F5F9] group-hover:text-[#9B80F8] transition-colors truncate">
                         {conv.other_participant?.display_name}
                       </h4>
-                      <span className="font-mono text-[11px] text-slate-500 font-semibold shrink-0">
+                      <span className="font-mono text-[10px] text-[#94A3B8] shrink-0">
                         {conv.other_participant?.profile_id}
                       </span>
                     </div>
 
-                    <div className="text-xs text-slate-400 truncate mt-0.5 max-w-xs sm:max-w-md">
+                    <div className="text-[13px] text-[#94A3B8] truncate mt-0.5 max-w-[200px] sm:max-w-md">
                       {conv.last_message ? (
                         conv.last_message.message_type === 'voice' ? (
-                          <span className="inline-flex items-center gap-1.5 text-pink-400 font-medium">
+                          <span className="inline-flex items-center gap-1.5 text-[#F472B6] font-medium">
                             <Mic className="w-3.5 h-3.5 shrink-0" />
                             <span>Voice message {conv.last_message.duration_seconds ? `(${conv.last_message.duration_seconds}s)` : ''}</span>
                           </span>
                         ) : conv.last_message.message_type === 'image' ? (
-                          <span className="inline-flex items-center gap-1.5 text-pink-400 font-medium">
+                          <span className="inline-flex items-center gap-1.5 text-[#F472B6] font-medium">
                             <ImageIcon className="w-3.5 h-3.5 shrink-0" />
                             <span>Photo</span>
                           </span>
@@ -325,11 +335,11 @@ export const HomeDashboard = () => {
                 </div>
 
                 <div className="flex flex-col items-end gap-1.5 shrink-0">
-                  <span className="text-[11px] text-slate-500">
+                  <span className="text-[11px] text-[#94A3B8] tabular-nums">
                     {formatTime(conv.last_message?.created_at || conv.updated_at)}
                   </span>
                   {conv.unread_count > 0 && (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-pink-500 text-white">
+                    <span className="min-w-[20px] h-5 px-1.5 rounded-full text-[11px] font-semibold bg-[#7957F5] text-white flex items-center justify-center tabular-nums">
                       {conv.unread_count}
                     </span>
                   )}

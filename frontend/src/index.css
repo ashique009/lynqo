@@ -2,6 +2,18 @@
 
 @custom-variant dark (&:where(.dark, .dark *));
 
+:root {
+  --lynqo-bg: #080C14;
+  --lynqo-surface: #111827;
+  --lynqo-surface-elevated: #161F30;
+  --lynqo-received: #1E293B;
+  --lynqo-accent: #7957F5;
+  --lynqo-accent-secondary: #F472B6;
+  --lynqo-text: #F1F5F9;
+  --lynqo-text-secondary: #94A3B8;
+  --lynqo-border: rgba(241, 245, 249, 0.08);
+}
+
 @theme {
   --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   --font-display: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
@@ -15,26 +27,33 @@
   --color-light-accent-hover: #c2436d;
   --color-light-accent-secondary: #F0997B;
 
-  --color-brand-black: #050508;
-  --color-brand-dark: #0c0a12;
-  --color-brand-card: rgba(18, 16, 28, 0.65);
-  --color-brand-purple: #7c3aed;
-  --color-brand-purple-light: #a855f7;
-  --color-brand-purple-dark: #6d28d9;
+  --color-brand-black: #080C14;
+  --color-brand-dark: #111827;
+  --color-brand-card: rgba(17, 24, 39, 0.85);
+  --color-brand-purple: #7957F5;
+  --color-brand-purple-light: #9B80F8;
+  --color-brand-purple-dark: #6340E0;
 }
 
+html,
 body {
-  background-color: #FCEEF3;
-  color: #2C2C2A;
+  background-color: var(--lynqo-bg);
+  color: var(--lynqo-text);
   font-family: var(--font-sans);
-  overflow-x: hidden;
-  min-height: 100vh;
-  transition: background-color 0.2s ease, color 0.2s ease;
+  overflow-x: clip;
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+  min-height: 100%;
+  -webkit-font-smoothing: antialiased;
 }
 
-html.dark body {
-  background-color: #050508;
-  color: #e2e8f0;
+/* Prevent iOS Safari auto-zoom on input focus */
+@media (max-width: 767px) {
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+  }
 }
 
 /* Glassmorphism panels */

@@ -11,7 +11,10 @@ export const BottomNavigation = () => {
   ];
 
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-40 md:hidden border-t border-slate-800 px-2 py-2 flex items-center justify-around shadow-2xl bg-slate-950/90 backdrop-blur-lg pb-safe">
+    <nav
+      aria-label="Primary mobile navigation"
+      className="fixed bottom-0 left-0 right-0 z-40 md:hidden border-t border-white/[0.08] px-2 pt-1.5 pb-safe flex items-center justify-around bg-[#080C14]/92 backdrop-blur-md"
+    >
       {navItems.map((item) => {
         const Icon = item.icon;
         return (
@@ -19,8 +22,8 @@ export const BottomNavigation = () => {
             key={item.name}
             to={item.path}
             className={({ isActive }) =>
-              `relative flex flex-col items-center justify-center flex-1 py-1 rounded-xl gap-1 text-[11px] font-semibold transition-all ${
-                isActive ? 'text-pink-400 font-bold' : 'text-slate-500 hover:text-slate-300'
+              `relative flex flex-col items-center justify-center flex-1 min-h-[44px] py-1 rounded-xl gap-0.5 text-[11px] font-medium transition-transform duration-150 active:scale-95 ${
+                isActive ? 'text-[#7957F5] font-semibold' : 'text-[#94A3B8] hover:text-[#F1F5F9]'
               }`
             }
           >

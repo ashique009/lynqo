@@ -113,10 +113,10 @@ export const Login = () => {
   };
 
   return (
-    <div className="relative min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between overflow-x-hidden selection:bg-pink-500 selection:text-white">
+    <div className="relative min-h-dvh bg-[#080C14] text-[#F1F5F9] flex flex-col justify-between overflow-x-clip selection:bg-[#7957F5] selection:text-white">
       {/* Lightweight ambient radial glows */}
-      <div className="absolute top-[-20%] left-[-20%] w-[60vw] h-[60vw] rounded-full bg-[radial-gradient(circle,rgba(219,39,119,0.12)_0%,transparent_70%)] pointer-events-none" />
-      <div className="absolute bottom-[-20%] right-[-20%] w-[60vw] h-[60vw] rounded-full bg-[radial-gradient(circle,rgba(79,70,229,0.12)_0%,transparent_70%)] pointer-events-none" />
+      <div className="absolute top-[-20%] left-[-20%] w-[55vw] h-[55vw] rounded-full bg-[radial-gradient(circle,rgba(121,87,245,0.08)_0%,transparent_70%)] pointer-events-none" />
+      <div className="absolute bottom-[-20%] right-[-20%] w-[55vw] h-[55vw] rounded-full bg-[radial-gradient(circle,rgba(244,114,182,0.06)_0%,transparent_70%)] pointer-events-none" />
 
       {/* Header */}
       <header className="px-6 py-6 md:px-12 flex justify-between items-center relative z-10 border-b border-slate-800/40">

@@ -93,7 +93,12 @@ export const MessageComposer = React.memo(({
   });
 
   const handleInputChange = (e) => {
-    setInputText(e.target.value);
+    const el = e.target;
+    setInputText(el.value);
+
+    // Auto-expand multiline textarea smoothly up to 120px
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
 
     if (!isTyping) {
       setIsTyping(true);
@@ -112,6 +117,9 @@ export const MessageComposer = React.memo(({
     if (!trimmed) return;
 
     setInputText('');
+    if (messageInputRef?.current) {
+      messageInputRef.current.style.height = 'auto';
+    }
     setIsTyping(false);
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
@@ -141,7 +149,7 @@ export const MessageComposer = React.memo(({
 
   return (
     <>
-      <div className="shrink-0 border-t border-slate-800 bg-slate-950/90 pb-safe">
+      <div className="shrink-0 border-t border-white/[0.08] bg-[#080C14]/95 pb-safe">
         <ReplyPreview
           replyingTo={replyingTo}
           currentProfileId={currentProfileId}
@@ -276,22 +284,26 @@ export const MessageComposer = React.memo(({
         ) : (
           <form
             onSubmit={handleSubmit}
-            className="p-2.5 sm:p-3 md:p-4 flex items-end gap-2"
+            className="px-2.5 sm:px-3.5 py-2 flex items-end gap-1.5"
           >
             {/* Photo Attachment Menu Trigger & Popover */}
             <div className="relative shrink-0" ref={attachMenuRef}>
               <button
                 type="button"
                 onClick={() => setIsAttachMenuOpen((prev) => !prev)}
-                className={`p-2.5 sm:p-3 rounded-2xl border transition-all cursor-pointer min-w-[44px] min-h-[44px] flex items-center justify-center ${
-                  isAttachMenuOpen
-                    ? 'bg-pink-500/20 border-pink-500/60 text-pink-400'
-                    : 'bg-slate-900 hover:bg-slate-800 border-slate-800 hover:border-pink-500/40 text-slate-400 hover:text-pink-400'
-                }`}
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center cursor-pointer"
                 title="Attach media"
                 aria-label="Attach media"
               >
-                <ImageIcon className="w-5 h-5" />
+                <span
+                  className={`w-10 h-10 rounded-full border flex items-center justify-center transition-colors ${
+                    isAttachMenuOpen
+                      ? 'bg-[#6848D8]/20 border-[#6848D8]/60 text-[#9B80F8]'
+                      : 'bg-[#111827] hover:bg-[#1E293B] border-white/[0.08] text-[#94A3B8] hover:text-[#F1F5F9]'
+                  }`}
+                >
+                  <ImageIcon className="w-[18px] h-[18px]" />
+                </span>
               </button>
 
               {isAttachMenuOpen && (
@@ -339,31 +351,35 @@ export const MessageComposer = React.memo(({
             <textarea
               ref={messageInputRef}
               rows={1}
-              placeholder="Type a message..."
+              placeholder="Message..."
               value={inputText}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
-              className="flex-grow px-3.5 sm:px-4 py-2.5 sm:py-3 rounded-2xl bg-slate-900 border border-slate-800 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-pink-500 focus:ring-1 focus:ring-pink-500 transition-all resize-none max-h-32 leading-relaxed"
+              className="flex-grow min-w-0 px-4 py-2.5 rounded-[20px] bg-[#111827] border border-white/[0.07] text-[#F1F5F9] placeholder-[#94A3B8] text-base md:text-[15px] focus:outline-none focus:border-[#6848D8] transition-colors resize-none max-h-[120px] leading-snug my-0.5"
             />
 
             {inputText.trim() ? (
               <button
                 type="submit"
-                className="p-2.5 sm:p-3 rounded-2xl bg-gradient-to-r from-pink-500 to-indigo-600 hover:from-pink-600 hover:to-indigo-700 text-white shadow-lg shadow-pink-500/20 transition-all cursor-pointer shrink-0 min-w-[44px] min-h-[44px] flex items-center justify-center"
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0 cursor-pointer"
                 title="Send message"
                 aria-label="Send message"
               >
-                <Send className="w-4 sm:w-5 h-4 sm:h-5" />
+                <span className="w-10 h-10 rounded-full bg-[#6848D8] hover:bg-[#5B3CC8] active:scale-95 text-white transition-transform flex items-center justify-center">
+                  <Send className="w-[18px] h-[18px] translate-x-[0.5px]" />
+                </span>
               </button>
             ) : (
               <button
                 type="button"
                 onPointerDown={handlePointerDown}
-                className="p-2.5 sm:p-3 rounded-2xl bg-slate-800 hover:bg-slate-700 active:bg-pink-600 text-slate-300 hover:text-white transition-all cursor-pointer shrink-0 touch-none select-none min-w-[44px] min-h-[44px] flex items-center justify-center"
+                className="min-w-[44px] min-h-[44px] flex items-center justify-center shrink-0 touch-none select-none cursor-pointer"
                 title="Tap to record hands-free, hold to speak"
                 aria-label="Record voice message"
               >
-                <Mic className="w-4 sm:w-5 h-4 sm:h-5" />
+                <span className="w-10 h-10 rounded-full bg-[#111827] hover:bg-[#1E293B] border border-white/[0.08] active:scale-95 active:bg-[#6848D8] text-[#94A3B8] hover:text-[#F1F5F9] transition-transform flex items-center justify-center">
+                  <Mic className="w-[18px] h-[18px]" />
+                </span>
               </button>
             )}
           </form>

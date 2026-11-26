@@ -54,10 +54,10 @@ export const MessageList = React.memo(({
     <div
       ref={chatContainerRef}
       onScroll={onScroll}
-      className="flex-grow p-3 sm:p-4 md:p-6 overflow-y-auto space-y-3 bg-gradient-to-b from-slate-950/40 to-slate-900/40 relative min-h-0"
+      className="flex-grow px-3 sm:px-4 md:px-6 py-3 overflow-y-auto overflow-x-hidden bg-[#080C14] relative min-h-0 overscroll-contain"
     >
       {loadingOlder && (
-        <div className="py-2 text-center text-xs text-slate-500">
+        <div className="py-2 text-center text-xs text-[#94A3B8]">
           Loading older messages...
         </div>
       )}
@@ -65,22 +65,36 @@ export const MessageList = React.memo(({
       {isLoading && messages.length === 0 ? (
         <ChatSkeleton />
       ) : messages.length === 0 ? (
-        <div className="h-full flex flex-col items-center justify-center text-center text-slate-500 space-y-2 py-8">
-          <div className="w-12 h-12 rounded-2xl bg-slate-800 text-pink-400 flex items-center justify-center">
+        <div className="h-full flex flex-col items-center justify-center text-center text-[#94A3B8] space-y-2 py-8">
+          <div className="w-12 h-12 rounded-2xl bg-[#111827] border border-white/[0.08] text-[#7957F5] flex items-center justify-center">
             <Send className="w-5 h-5" />
           </div>
-          <p className="text-sm font-semibold text-slate-300">No messages yet</p>
+          <p className="text-sm font-semibold text-[#F1F5F9]">No messages yet</p>
           <p className="text-xs">Send a message to say hello to {otherUser?.display_name}!</p>
         </div>
       ) : (
         messages.map((msg, index) => {
           const isMe = msg.sender_profile_id === currentProfileId;
           const isEditing = editingMessageId === msg.id;
+          const prevMsg = index > 0 ? messages[index - 1] : null;
+          const nextMsg = index < messages.length - 1 ? messages[index + 1] : null;
+
+          const sameAsPrev =
+            prevMsg &&
+            prevMsg.sender_profile_id === msg.sender_profile_id &&
+            Math.abs(new Date(msg.created_at) - new Date(prevMsg.created_at)) < 120000;
+          const sameAsNext =
+            nextMsg &&
+            nextMsg.sender_profile_id === msg.sender_profile_id &&
+            Math.abs(new Date(nextMsg.created_at) - new Date(msg.created_at)) < 120000;
+
           return (
             <SwipeableMessageItem
               key={msg.client_message_id || msg.id || index}
               message={msg}
               isMe={isMe}
+              isFirstInGroup={!sameAsPrev}
+              isLastInGroup={!sameAsNext}
               isEditing={isEditing}
               editingText={isEditing ? editingText : ''}
               setEditingText={setEditingText}
@@ -104,10 +118,10 @@ export const MessageList = React.memo(({
 
       {/* Real-time typing bubble */}
       {otherUserTyping && (
-        <div className="flex items-center gap-1.5 p-3 rounded-2xl bg-slate-800/60 border border-slate-700/40 text-slate-400 text-xs w-20">
-          <span className="w-2 h-2 bg-pink-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
-          <span className="w-2 h-2 bg-pink-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
-          <span className="w-2 h-2 bg-pink-400 rounded-full animate-bounce" />
+        <div className="mt-2 flex items-center gap-1.5 px-3.5 py-2.5 rounded-[20px] rounded-bl-[6px] bg-[#1E293B] border border-white/[0.06] text-[#94A3B8] text-xs w-16">
+          <span className="w-1.5 h-1.5 bg-[#94A3B8] rounded-full animate-bounce [animation-delay:-0.3s] motion-reduce:animate-none" />
+          <span className="w-1.5 h-1.5 bg-[#94A3B8] rounded-full animate-bounce [animation-delay:-0.15s] motion-reduce:animate-none" />
+          <span className="w-1.5 h-1.5 bg-[#94A3B8] rounded-full animate-bounce motion-reduce:animate-none" />
         </div>
       )}
 

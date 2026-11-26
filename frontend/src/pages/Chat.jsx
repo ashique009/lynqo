@@ -994,7 +994,7 @@ export const Chat = () => {
   const otherUser = conversation?.other_participant;
 
   return (
-    <div className="flex flex-col h-full md:h-[calc(100vh-8rem)] w-full max-w-4xl mx-auto md:rounded-3xl bg-slate-900/90 md:border md:border-slate-800 shadow-2xl overflow-hidden backdrop-blur-md relative">
+    <div className="flex flex-col h-full md:h-[calc(100vh-8rem)] w-full max-w-4xl mx-auto md:rounded-3xl bg-[#080C14] md:border md:border-white/[0.08] shadow-2xl overflow-hidden relative">
       <ChatHeader
         otherUser={otherUser}
         otherUserTyping={otherUserTyping}
