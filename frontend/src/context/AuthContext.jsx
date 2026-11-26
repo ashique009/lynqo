@@ -1,4 +1,4 @@
-import React, { createContext, useState, useEffect, useContext, useCallback, useRef } from 'react';
+import React, { createContext, useState, useEffect, useContext, useCallback, useRef, useMemo } from 'react';
 import { isAuthFailureResponse } from '../api/client';
 import { profileService } from '../services/profileService';
 import { wsService } from '../services/websocketService';
@@ -169,7 +169,7 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const updateProfile = async ({ displayName, profilePictureFile }) => {
+  const updateProfile = useCallback(async ({ displayName, profilePictureFile }) => {
     try {
       const res = await profileService.updateProfile({ displayName, profilePictureFile });
       if (res.success && res.profile) {
@@ -182,9 +182,9 @@ export const AuthProvider = ({ children }) => {
     } catch (err) {
       return { success: false, message: err.message || 'Error updating profile' };
     }
-  };
+  }, []);
 
-  const regenerateRecoveryCode = async () => {
+  const regenerateRecoveryCode = useCallback(async () => {
     try {
       const res = await profileService.regenerateRecoveryCode();
       if (res.success) {
@@ -194,9 +194,9 @@ export const AuthProvider = ({ children }) => {
     } catch (err) {
       return { success: false, message: err.message || 'Error regenerating recovery code' };
     }
-  };
+  }, []);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     try {
       await profileService.logout();
     } catch (err) {
@@ -204,9 +204,9 @@ export const AuthProvider = ({ children }) => {
     } finally {
       clearAuth();
     }
-  };
+  }, [clearAuth]);
 
-  const logoutAll = async () => {
+  const logoutAll = useCallback(async () => {
     try {
       await profileService.logoutAll();
     } catch (err) {
@@ -214,9 +214,14 @@ export const AuthProvider = ({ children }) => {
     } finally {
       clearAuth();
     }
-  };
+  }, [clearAuth]);
 
-  const value = {
+  const refreshProfile = useCallback(
+    () => (tokenRef.current ? fetchCurrentProfile(tokenRef.current) : null),
+    [fetchCurrentProfile]
+  );
+
+  const value = useMemo(() => ({
     token,
     profile,
     isAuthenticated: Boolean(token && profile),
@@ -228,8 +233,8 @@ export const AuthProvider = ({ children }) => {
     regenerateRecoveryCode,
     logout,
     logoutAll,
-    refreshProfile: () => (token ? fetchCurrentProfile(token) : null),
-  };
+    refreshProfile,
+  }), [token, profile, isLoading, updateProfile, regenerateRecoveryCode, logout, logoutAll, refreshProfile]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };

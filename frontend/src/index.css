@@ -1,11 +1,10 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
 @import "tailwindcss";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  --font-display: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --font-display: 'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 
   --color-light-bg: #FCEEF3;
   --color-light-card: #ffffff;
@@ -187,4 +186,59 @@ html.dark * {
 
 .reply-highlight {
   animation: replyHighlightPulse 1.4s ease-out;
+}
+
+/* Lightweight GPU-composited Toast & Modal Animations */
+@keyframes lynqoToastEnter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 20px, 0) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.lynqo-toast-enter {
+  animation: lynqoToastEnter 0.22s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+}
+
+@keyframes lynqoModalBackdrop {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes lynqoModalEnter {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+.lynqo-modal-backdrop {
+  animation: lynqoModalBackdrop 0.18s ease-out forwards;
+}
+
+.lynqo-modal-enter {
+  animation: lynqoModalEnter 0.24s cubic-bezier(0.32, 0.72, 0, 1) forwards;
+}
+
+/* Long conversation offscreen rendering optimization */
+.message-row-opt {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 72px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lynqo-toast-enter,
+  .lynqo-modal-backdrop,
+  .lynqo-modal-enter,
+  .reply-highlight {
+    animation: none !important;
+  }
 }

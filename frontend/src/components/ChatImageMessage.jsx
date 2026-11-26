@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Loader2, RefreshCw, ZoomIn, AlertCircle } from 'lucide-react';
 import { getAuthenticatedMediaUrl } from '../utils/mediaUrl';
 
-export const ChatImageMessage = ({
+export const ChatImageMessage = React.memo(({
   message,
   isMe,
   onImageClick,
@@ -168,6 +168,6 @@ export const ChatImageMessage = ({
       </div>
     </div>
   );
-};
+});
 
 export default ChatImageMessage;

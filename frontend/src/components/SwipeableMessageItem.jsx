@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback } from 'react';
 import {
   MoreVertical, Check, CheckCheck, Clock, AlertCircle, Ban, CornerUpLeft, Reply
 } from 'lucide-react';
@@ -8,7 +8,7 @@ import { ChatImageMessage } from './ChatImageMessage';
 const SWIPE_THRESHOLD = 38; // px offset to trigger reply
 const MAX_SWIPE_OFFSET = 60; // px maximum visual resistance
 
-export const SwipeableMessageItem = ({
+export const SwipeableMessageItem = React.memo(({
   message,
   isMe,
   isEditing,
@@ -28,20 +28,59 @@ export const SwipeableMessageItem = ({
   onTouchEnd,
   onContextMenu,
 }) => {
-  const [offsetX, setOffsetX] = useState(0);
-  const [isDragging, setIsDragging] = useState(false);
+  const rowRef = useRef(null);
+  const bubbleWrapRef = useRef(null);
+  const badgeRef = useRef(null);
+  const badgeIconRef = useRef(null);
 
+  const isDraggingRef = useRef(false);
+  const offsetXRef = useRef(0);
+  const rafRef = useRef(null);
   const startXRef = useRef(0);
   const startYRef = useRef(0);
   const isSwipingHorizontal = useRef(false);
   const hasDeterminedDirection = useRef(false);
   const thresholdTriggered = useRef(false);
 
+  const prefersReducedMotion =
+    typeof window !== 'undefined' &&
+    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+  const applyTransform = useCallback((x, dragging) => {
+    const progress = Math.min(x / SWIPE_THRESHOLD, 1);
+    if (bubbleWrapRef.current) {
+      bubbleWrapRef.current.style.transition = dragging || prefersReducedMotion
+        ? 'none'
+        : 'transform 0.25s cubic-bezier(0.32, 0.72, 0, 1)';
+      bubbleWrapRef.current.style.transform = `translate3d(${x}px, 0, 0)`;
+    }
+    if (badgeRef.current) {
+      badgeRef.current.style.transition = dragging || prefersReducedMotion
+        ? 'none'
+        : 'transform 0.2s cubic-bezier(0.2, 0, 0, 1), opacity 0.2s ease';
+      badgeRef.current.style.opacity = String(progress);
+      badgeRef.current.style.transform = `translate3d(${Math.max(0, x - 42)}px, -50%, 0) scale(${0.7 + progress * 0.35})`;
+    }
+    if (badgeIconRef.current) {
+      if (progress >= 1) {
+        badgeIconRef.current.classList.add('scale-110', 'text-white');
+      } else {
+        badgeIconRef.current.classList.remove('scale-110', 'text-white');
+      }
+    }
+  }, [prefersReducedMotion]);
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+      }
+    };
+  }, []);
+
   // Gesture Handlers
   const handlePointerDown = (e) => {
-    // Only handle primary pointer (left click or touch)
     if (e.button !== undefined && e.button !== 0) return;
-    // Don't drag while editing or if clicking inside button or input
     if (isEditing || e.target.closest('button, input, textarea, a')) return;
 
     startXRef.current = e.clientX;
@@ -49,27 +88,27 @@ export const SwipeableMessageItem = ({
     isSwipingHorizontal.current = false;
     hasDeterminedDirection.current = false;
     thresholdTriggered.current = false;
-    setIsDragging(true);
+    isDraggingRef.current = true;
   };
 
   const handlePointerMove = (e) => {
-    if (!isDragging) return;
+    if (!isDraggingRef.current) return;
 
     const dx = e.clientX - startXRef.current;
     const dy = e.clientY - startYRef.current;
 
-    // Determine swipe direction after small initial movement threshold (8px)
+    // Determine swipe direction after small initial movement threshold (10px prevents accidental trigger)
     if (!hasDeterminedDirection.current) {
-      if (Math.hypot(dx, dy) > 8) {
+      if (Math.hypot(dx, dy) > 10) {
         hasDeterminedDirection.current = true;
-        // Swipe right only (dx > 0) with dominant horizontal movement
-        if (dx > 0 && Math.abs(dx) > Math.abs(dy)) {
+        if (dx > 0 && Math.abs(dx) > Math.abs(dy) * 1.2) {
           isSwipingHorizontal.current = true;
+          if (rowRef.current) rowRef.current.classList.add('select-none');
         } else {
-          // Vertical scroll detected: release horizontal capture
           isSwipingHorizontal.current = false;
-          setIsDragging(false);
-          setOffsetX(0);
+          isDraggingRef.current = false;
+          offsetXRef.current = 0;
+          applyTransform(0, false);
           return;
         }
       } else {
@@ -78,9 +117,15 @@ export const SwipeableMessageItem = ({
     }
 
     if (isSwipingHorizontal.current) {
-      // Damped displacement
       const clampedOffset = Math.min(Math.max(0, dx * 0.45), MAX_SWIPE_OFFSET);
-      setOffsetX(clampedOffset);
+      offsetXRef.current = clampedOffset;
+
+      if (!rafRef.current) {
+        rafRef.current = requestAnimationFrame(() => {
+          rafRef.current = null;
+          applyTransform(offsetXRef.current, true);
+        });
+      }
 
       if (clampedOffset >= SWIPE_THRESHOLD && !thresholdTriggered.current) {
         thresholdTriggered.current = true;
@@ -96,8 +141,16 @@ export const SwipeableMessageItem = ({
   };
 
   const handlePointerEnd = () => {
-    if (!isDragging) return;
-    setIsDragging(false);
+    if (!isDraggingRef.current) return;
+    isDraggingRef.current = false;
+
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (rowRef.current) {
+      rowRef.current.classList.remove('select-none');
+    }
 
     if (isSwipingHorizontal.current && thresholdTriggered.current) {
       if (onReply) {
@@ -105,19 +158,18 @@ export const SwipeableMessageItem = ({
       }
     }
 
-    // Reset with smooth CSS transition
-    setOffsetX(0);
+    offsetXRef.current = 0;
+    applyTransform(0, false);
     isSwipingHorizontal.current = false;
     hasDeterminedDirection.current = false;
     thresholdTriggered.current = false;
   };
 
-  const progress = Math.min(offsetX / SWIPE_THRESHOLD, 1);
-
   return (
     <div
+      ref={rowRef}
       id={`msg-${message.id}`}
-      className={`flex flex-col group relative ${isMe ? 'items-end' : 'items-start'} ${isDragging && isSwipingHorizontal.current ? 'select-none' : 'select-text'}`}
+      className={`message-row-opt flex flex-col group relative select-text ${isMe ? 'items-end' : 'items-start'}`}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerEnd}
@@ -130,21 +182,23 @@ export const SwipeableMessageItem = ({
     >
       {/* Swipe to Reply Indicator Badge (Sliding in from Left) */}
       <div
+        ref={badgeRef}
         style={{
-          opacity: progress,
-          transform: `translateX(${Math.max(0, offsetX - 42)}px) scale(${0.7 + progress * 0.35})`,
-          transition: isDragging ? 'none' : 'transform 0.2s cubic-bezier(0.2, 0, 0, 1), opacity 0.2s ease',
+          opacity: 0,
+          transform: 'translate3d(0px, -50%, 0) scale(0.7)',
+          willChange: 'transform, opacity',
         }}
-        className="absolute left-0 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-pink-500/20 border border-pink-500/50 text-pink-400 flex items-center justify-center pointer-events-none z-10 shadow-lg shadow-pink-500/20"
+        className="absolute left-0 top-1/2 w-8 h-8 rounded-full bg-pink-500/20 border border-pink-500/50 text-pink-400 flex items-center justify-center pointer-events-none z-10 shadow-lg shadow-pink-500/20"
       >
-        <Reply className={`w-4 h-4 transition-transform duration-150 ${progress >= 1 ? 'scale-110 text-white' : ''}`} />
+        <Reply ref={badgeIconRef} className="w-4 h-4 transition-transform duration-150" />
       </div>
 
       <div
+        ref={bubbleWrapRef}
         className="flex items-center gap-1 max-w-[85%] sm:max-w-[75%]"
         style={{
-          transform: `translateX(${offsetX}px)`,
-          transition: isDragging ? 'none' : 'transform 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275)',
+          transform: 'translate3d(0px, 0, 0)',
+          willChange: 'transform',
         }}
       >
         {/* Left 3-dot trigger for outgoing messages */}
@@ -328,4 +382,4 @@ export const SwipeableMessageItem = ({
       </div>
     </div>
   );
-};
+});

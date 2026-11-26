@@ -3,7 +3,7 @@ import { Play, Pause, RotateCcw, Loader2 } from 'lucide-react';
 import { audioPlayerManager } from '../utils/audioPlayerManager';
 import { getAuthenticatedMediaUrl } from '../utils/mediaUrl';
 
-export const VoiceMessage = ({
+export const VoiceMessage = React.memo(({
   message,
   isMe,
   formatTime,
@@ -11,13 +11,16 @@ export const VoiceMessage = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [hasError, setHasError] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(message.duration_seconds || 0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
 
   const audioRef = useRef(null);
   const blobUrlRef = useRef(null);
   const waveformRef = useRef(null);
+  const progressOverlayRef = useRef(null);
+  const timerTextRef = useRef(null);
+  const durationRef = useRef(duration);
+  durationRef.current = duration;
   const messageId = message.id || message.client_message_id;
 
   // Generate deterministic bar heights based on message ID for waveform aesthetics
@@ -55,6 +58,24 @@ export const VoiceMessage = ({
   useEffect(() => {
     blobUrlRef.current = null;
   }, [message.audio_url]);
+
+  const formatTimer = useCallback((sec) => {
+    if (!sec || isNaN(sec)) return '0:00';
+    const total = Math.floor(sec);
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  }, []);
+
+  const updateProgressDom = useCallback((timeSec, totalSec) => {
+    const pct = totalSec > 0 ? Math.max(0, Math.min(100, (timeSec / totalSec) * 100)) : 0;
+    if (progressOverlayRef.current) {
+      progressOverlayRef.current.style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
+    }
+    if (timerTextRef.current) {
+      timerTextRef.current.textContent = formatTimer(timeSec > 0 ? timeSec : totalSec);
+    }
+  }, [formatTimer]);
 
   // Pause this audio callback for audioPlayerManager
   const pauseSelf = useCallback(() => {
@@ -108,12 +129,13 @@ export const VoiceMessage = ({
       };
 
       audio.ontimeupdate = () => {
-        setCurrentTime(audio.currentTime);
+        const dur = audio.duration && isFinite(audio.duration) ? audio.duration : durationRef.current;
+        updateProgressDom(audio.currentTime, dur);
       };
 
       audio.onended = () => {
         setIsPlaying(false);
-        setCurrentTime(0);
+        updateProgressDom(0, durationRef.current);
         audioPlayerManager.stop(messageId);
       };
 
@@ -193,7 +215,7 @@ export const VoiceMessage = ({
     const percent = Math.max(0, Math.min(1, clickX / rect.width));
     const targetTime = percent * duration;
 
-    setCurrentTime(targetTime);
+    updateProgressDom(targetTime, duration);
     if (audioRef.current) {
       audioRef.current.currentTime = targetTime;
     }
@@ -209,16 +231,6 @@ export const VoiceMessage = ({
       audioRef.current.playbackRate = nextSpeed;
     }
   };
-
-  const formatTimer = (sec) => {
-    if (!sec || isNaN(sec)) return '0:00';
-    const total = Math.floor(sec);
-    const m = Math.floor(total / 60);
-    const s = total % 60;
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
-  };
-
-  const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
     <div className="flex flex-col gap-1 w-full min-w-[190px] max-w-[270px] select-none">
@@ -253,43 +265,47 @@ export const VoiceMessage = ({
           </button>
         )}
 
-        {/* Waveform Visualization */}
+        {/* Waveform Visualization (GPU-clipped progress overlay; zero React re-renders during playback) */}
         <div className="flex-grow flex flex-col gap-1">
           <div
             ref={waveformRef}
             onClick={handleSeek}
-            className="h-8 flex items-center gap-[2.5px] cursor-pointer py-1 relative"
+            className="h-8 cursor-pointer py-1 relative"
             role="slider"
             aria-label="Seek voice message"
             aria-valuemin={0}
             aria-valuemax={duration}
-            aria-valuenow={currentTime}
           >
-            {waveformBars.map((heightPercent, idx) => {
-              const barPercent = (idx / waveformBars.length) * 100;
-              const isPlayed = barPercent <= progressPercent;
-              return (
+            <div className="h-full flex items-center gap-[2.5px]">
+              {waveformBars.map((heightPercent, idx) => (
                 <div
                   key={idx}
                   style={{ height: `${heightPercent}%` }}
-                  className={`flex-1 rounded-full transition-colors duration-75 ${
-                    isPlayed
-                      ? isMe
-                        ? 'bg-white shadow-[0_0_8px_rgba(255,255,255,0.4)]'
-                        : 'bg-pink-400'
-                      : isMe
-                      ? 'bg-white/30'
-                      : 'bg-slate-600'
+                  className={`flex-1 rounded-full ${isMe ? 'bg-white/30' : 'bg-slate-600'}`}
+                />
+              ))}
+            </div>
+            <div
+              ref={progressOverlayRef}
+              style={{ clipPath: 'inset(0 100% 0 0)' }}
+              className="absolute inset-0 py-1 flex items-center gap-[2.5px] pointer-events-none"
+            >
+              {waveformBars.map((heightPercent, idx) => (
+                <div
+                  key={idx}
+                  style={{ height: `${heightPercent}%` }}
+                  className={`flex-1 rounded-full ${
+                    isMe ? 'bg-white shadow-[0_0_8px_rgba(255,255,255,0.4)]' : 'bg-pink-400'
                   }`}
                 />
-              );
-            })}
+              ))}
+            </div>
           </div>
 
           {/* Time & Speed Controls */}
           <div className="flex items-center justify-between text-[11px] font-mono leading-none">
-            <span className={isMe ? 'text-white/80' : 'text-slate-400'}>
-              {isPlaying ? formatTimer(currentTime) : formatTimer(duration)}
+            <span ref={timerTextRef} className={isMe ? 'text-white/80' : 'text-slate-400'}>
+              {formatTimer(duration)}
             </span>
 
             <button
@@ -308,6 +324,6 @@ export const VoiceMessage = ({
       </div>
     </div>
   );
-};
+});
 
 export default VoiceMessage;

@@ -87,13 +87,13 @@ test('Phase 1 Voice & Media: shared Blob URL lifecycle is owned by mediaUrl.js a
   }
 });
 
-test('Phase 1 Private Image: Chat.jsx uses getAuthenticatedMediaUrl for docked reply thumbnails', () => {
-  const chatSrc = fs.readFileSync(
-    path.resolve(process.cwd(), 'src/pages/Chat.jsx'),
+test('Phase 1 Private Image: ReplyPreview.jsx uses getAuthenticatedMediaUrl for docked reply thumbnails', () => {
+  const replySrc = fs.readFileSync(
+    path.resolve(process.cwd(), 'src/components/chat/ReplyPreview.jsx'),
     'utf8'
   );
-  assert.equal(chatSrc.includes('AuthenticatedReplyThumbnail'), true);
-  assert.equal(chatSrc.includes('getAuthenticatedMediaUrl(rawUrl)'), true);
+  assert.equal(replySrc.includes('AuthenticatedReplyThumbnail'), true);
+  assert.equal(replySrc.includes('getAuthenticatedMediaUrl(rawUrl)'), true);
 });
 
 test('Phase 1 WebSocket: missed message recovery merges cleanly without duplicates', () => {
