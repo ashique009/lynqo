@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Play, Pause, RotateCcw, Loader2 } from 'lucide-react';
 import { audioPlayerManager } from '../utils/audioPlayerManager';
-import { getAuthenticatedMediaUrl } from '../utils/mediaUrl';
+import { getAuthenticatedMediaUrl, acquireMediaUrl, releaseMediaUrl } from '../utils/mediaUrl';
 
 export const VoiceMessage = React.memo(({
   message,
@@ -50,9 +50,12 @@ export const VoiceMessage = React.memo(({
         audioRef.current.src = '';
         audioRef.current = null;
       }
+      if (blobUrlRef.current && message.audio_url && !message.audio_url.startsWith('blob:') && !message.audio_url.startsWith('data:')) {
+        releaseMediaUrl(message.audio_url);
+      }
       blobUrlRef.current = null;
     };
-  }, [messageId]);
+  }, [messageId, message.audio_url]);
 
   // Reset local ref if message.audio_url transitions (e.g. optimistic blob -> server URL)
   useEffect(() => {
@@ -106,6 +109,7 @@ export const VoiceMessage = React.memo(({
     if (!objectUrl) {
       throw new Error('Failed to load authenticated audio.');
     }
+    acquireMediaUrl(message.audio_url);
     blobUrlRef.current = objectUrl;
     return objectUrl;
   }, [message.audio_url]);
