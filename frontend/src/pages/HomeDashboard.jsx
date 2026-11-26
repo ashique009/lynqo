@@ -46,21 +46,22 @@ export const HomeDashboard = () => {
           cacheSet('dashboard_conversations', merged, 120);
           return merged;
         });
-        // Background prefetch messages for the most recent conversation during idle time
+        // Background prefetch Chat chunk & top conversation messages during idle time
         if (convList.length > 0) {
           const topConvId = convList[0].id;
-          if (!cacheGet(`conv_msgs_${topConvId}`)) {
-            const schedulePrefetch = typeof window !== 'undefined' && 'requestIdleCallback' in window
-              ? (fn) => window.requestIdleCallback(fn, { timeout: 1200 })
-              : (fn) => setTimeout(fn, 350);
-            schedulePrefetch(() => {
+          const schedulePrefetch = typeof window !== 'undefined' && 'requestIdleCallback' in window
+            ? (fn) => window.requestIdleCallback(fn, { timeout: 1200 })
+            : (fn) => setTimeout(fn, 350);
+          schedulePrefetch(() => {
+            import('./Chat').catch(() => {});
+            if (!cacheGet(`conv_msgs_${topConvId}`)) {
               chatService.getMessages(topConvId, { limit: 50, mark_read: false }).then((msgRes) => {
                 if (msgRes.success) {
                   cacheSet(`conv_msgs_${topConvId}`, msgRes.messages || [], 60);
                 }
               }).catch(() => {});
-            });
-          }
+            }
+          });
         }
       }
     } catch (err) {
@@ -295,6 +296,15 @@ export const HomeDashboard = () => {
             {filteredConversations.map((conv) => (
               <div
                 key={conv.id}
+                onPointerDown={() => {
+                  if (!cacheGet(`conv_msgs_${conv.id}`)) {
+                    chatService.getMessages(conv.id, { limit: 50, mark_read: false }).then((msgRes) => {
+                      if (msgRes.success) {
+                        cacheSet(`conv_msgs_${conv.id}`, msgRes.messages || [], 60);
+                      }
+                    }).catch(() => {});
+                  }
+                }}
                 onClick={() => {
                   cacheSet(`conv_detail_${conv.id}`, conv, 120);
                   navigate(`/chat/${conv.id}`, { state: { conversation: conv } });

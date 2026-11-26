@@ -42,7 +42,18 @@ export const Chat = () => {
   const [isWsConnected, setIsWsConnected] = useState(wsService.isConnected);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [newMessagesCount, setNewMessagesCount] = useState(0);
-  const [unreadBannerInfo, setUnreadBannerInfo] = useState(null);
+  const [unreadBannerInfo, setUnreadBannerInfo] = useState(() => {
+    const cached = cacheGet(`conv_msgs_${conversationId}`);
+    if (!cached || cached.length === 0) return null;
+    const firstUnread = cached.find(
+      (m) => m.sender_profile_id !== profile?.profile_id && m.status !== 'seen' && !m.is_read
+    );
+    if (!firstUnread) return null;
+    const count = cached.filter(
+      (m) => m.sender_profile_id !== profile?.profile_id && m.status !== 'seen' && !m.is_read
+    ).length;
+    return { firstUnreadId: firstUnread.id, count };
+  });
   const [isPositionReady, setIsPositionReady] = useState(false);
 
   // Message Action Menu & Edit / Delete states
@@ -95,8 +106,18 @@ export const Chat = () => {
 
   // Pre-paint deterministic initial scroll positioning (zero-flicker before browser paint)
   useLayoutEffect(() => {
-    const pending = pendingInitialScrollRef.current;
-    if (!pending || isLoading || messages.length === 0) return;
+    if (isLoading || messages.length === 0) return;
+
+    let pending = pendingInitialScrollRef.current;
+    if (!pending && !isPositionReady) {
+      const firstUnread = messages.find(
+        (m) => m.sender_profile_id !== profileRef.current?.profile_id && m.status !== 'seen' && !m.is_read
+      );
+      pending = firstUnread
+        ? { type: 'unread', id: firstUnread.id, convId: activeConvIdRef.current, markSeenOnReady: false }
+        : { type: 'bottom', convId: activeConvIdRef.current, markSeenOnReady: false };
+    }
+    if (!pending) return;
     if (String(pending.convId) !== String(activeConvIdRef.current)) return;
 
     const container = chatContainerRef.current;
@@ -203,17 +224,20 @@ export const Chat = () => {
       setConversation(null);
     }
 
-    const initialMessages = cachedMsgs || [];
+    const hasCachedMsgs = Boolean(cachedMsgs && cachedMsgs.length > 0);
+    const initialMessages = hasCachedMsgs ? cachedMsgs : [];
     setMessages(initialMessages);
-    setIsLoading(!cachedMsgs);
-    setIsPositionReady(false);
+    setIsLoading(!hasCachedMsgs);
+    if (!hasCachedMsgs) {
+      setIsPositionReady(false);
+    }
     setOtherUserTyping(false);
     setReplyingTo(null);
     setUnreadBannerInfo(null);
     setNewMessagesCount(0);
 
     // If cached messages exist, schedule pre-paint positioning immediately so frame 1 is never at scrollTop=0
-    if (cachedMsgs && cachedMsgs.length > 0) {
+    if (hasCachedMsgs) {
       const cachedUnread = cachedMsgs.find(
         (m) => m.sender_profile_id !== profileRef.current?.profile_id && m.status !== 'seen' && !m.is_read
       );
