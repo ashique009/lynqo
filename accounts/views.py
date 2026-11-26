@@ -135,6 +135,7 @@ def generate_recovery_code(profile_id):
 # ============================================================================
 
 class LoginView(APIView):
+    authentication_classes = []
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
@@ -205,6 +206,7 @@ class LoginView(APIView):
 
 
 class ProfileCreateView(APIView):
+    authentication_classes = []
     permission_classes = [permissions.AllowAny]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
@@ -277,6 +279,7 @@ class ProfileCreateView(APIView):
 
 
 class ProfileRecoverView(APIView):
+    authentication_classes = []
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
@@ -980,7 +983,13 @@ class MessageListView(APIView):
 
         qs = Message.objects.filter(conversation=conv).exclude(deleted_for=request.user).select_related(
             'sender__profile', 'conversation', 'reply_to', 'reply_to__sender__profile'
-        ).prefetch_related('reply_to__deleted_for')
+        ).prefetch_related(
+            models.Prefetch(
+                'reply_to__deleted_for',
+                queryset=User.objects.only('id'),
+                to_attr='prefetched_deleted_for'
+            )
+        )
 
         if around_id:
             try:

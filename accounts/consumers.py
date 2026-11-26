@@ -1,7 +1,10 @@
 import json
+import time
+from collections import deque
 from urllib.parse import parse_qs
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
+from django.db.models import Q
 from django.utils import timezone
 from django.core.cache import cache
 from .models import ProfileSession, Conversation, Message, ConnectRequest, User
@@ -40,6 +43,9 @@ def is_user_online(user_id):
 class ChatConsumer(AsyncJsonWebsocketConsumer):
     async def connect(self):
         self.joined_groups = set()
+        self._conv_participants = {}
+        self._delivered_msg_ids = deque(maxlen=128)
+        self._profile_id = None
         self.user = await self.authenticate_connection()
         if not self.user:
             await self.close(code=4001)
@@ -100,6 +106,7 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                 group_name = f"conv_{conv_id}"
                 await self.channel_layer.group_discard(group_name, self.channel_name)
                 self.joined_groups.discard(group_name)
+                self._conv_participants.pop(str(conv_id), None)
 
         elif msg_type == 'chat_message':
             await self.handle_chat_message(content)
@@ -180,9 +187,9 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
     async def handle_typing(self, data):
         conv_id = data.get('conversation_id')
         is_typing = bool(data.get('is_typing'))
-        if await self.is_participant(conv_id):
+        authorized, other_user_id = await self.get_conv_auth(conv_id)
+        if authorized:
             profile_id = await self.get_profile_id()
-            other_user_id = await self.get_other_participant_id(conv_id)
             event = {
                 'type': 'broadcast_typing',
                 'conversation_id': conv_id,
@@ -197,7 +204,8 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
     async def handle_mark_delivered(self, data):
         conv_id = data.get('conversation_id')
         raw_ids = data.get('message_ids') or ([data.get('message_id')] if data.get('message_id') else [])
-        if await self.is_participant(conv_id) and raw_ids:
+        authorized, _ = await self.get_conv_auth(conv_id)
+        if authorized and raw_ids:
             delivered_ids, other_user_id = await self.mark_messages_as_delivered(conv_id, raw_ids)
             if delivered_ids:
                 event = {
@@ -211,7 +219,8 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
 
     async def handle_mark_seen(self, data):
         conv_id = data.get('conversation_id')
-        if await self.is_participant(conv_id):
+        authorized, _ = await self.get_conv_auth(conv_id)
+        if authorized:
             updated_count, other_user_id = await self.mark_messages_as_seen(conv_id)
             if updated_count > 0:
                 profile_id = await self.get_profile_id()
@@ -228,9 +237,15 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
     async def broadcast_new_message(self, event):
         if event.get('sender_channel') == self.channel_name:
             return
+        msg = event.get('message') or {}
+        msg_id = msg.get('id')
+        if msg_id is not None:
+            if msg_id in self._delivered_msg_ids:
+                return
+            self._delivered_msg_ids.append(msg_id)
         await self.send_json({
             'type': 'new_message',
-            'message': event['message'],
+            'message': msg,
         })
 
     async def broadcast_message_edited(self, event):
@@ -293,9 +308,11 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
 
     async def send_contacts_presence(self):
         contact_ids = await self.get_contact_ids()
-        for cid in contact_ids:
+        if not contact_ids:
+            return
+        contacts_info = await self.get_contacts_profile_info_batch(contact_ids)
+        for cid, profile_id, last_seen_str in contacts_info:
             online = is_user_online(cid)
-            profile_id, last_seen_str = await self.get_user_profile_info(cid)
             if profile_id:
                 await self.send_json({
                     'type': 'presence_update',
@@ -303,6 +320,19 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                     'is_online': online,
                     'last_seen': last_seen_str,
                 })
+
+    @database_sync_to_async
+    def get_contacts_profile_info_batch(self, contact_ids):
+        users = User.objects.filter(id__in=contact_ids).select_related('profile').only(
+            'id', 'username', 'last_seen', 'profile__profile_id'
+        )
+        results = []
+        for user in users:
+            profile = getattr(user, 'profile', None)
+            profile_id = profile.profile_id if profile else user.username
+            last_seen_str = user.last_seen.isoformat() if user.last_seen else None
+            results.append((user.id, profile_id, last_seen_str))
+        return results
 
     @database_sync_to_async
     def get_user_profile_info(self, user_id):
@@ -365,18 +395,34 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
         now = timezone.now()
         User.objects.filter(id=self.user.id).update(last_seen=now)
 
+    async def get_profile_id(self):
+        if self._profile_id:
+            return self._profile_id
+        self._profile_id = await self._fetch_profile_id()
+        return self._profile_id
+
     @database_sync_to_async
-    def get_profile_id(self):
+    def _fetch_profile_id(self):
         return getattr(self.user.profile, 'profile_id', self.user.username)
 
     @database_sync_to_async
     def get_contact_ids(self):
         # Contacts are users sharing active conversations with self.user (and any legacy accepted requests)
-        p1_ids = list(Conversation.objects.filter(participant_2=self.user).values_list('participant_1_id', flat=True))
-        p2_ids = list(Conversation.objects.filter(participant_1=self.user).values_list('participant_2_id', flat=True))
-        sent = list(ConnectRequest.objects.filter(sender=self.user, status='accepted').values_list('receiver_id', flat=True))
-        received = list(ConnectRequest.objects.filter(receiver=self.user, status='accepted').values_list('sender_id', flat=True))
-        return list(set(p1_ids + p2_ids + sent + received))
+        conv_pairs = Conversation.objects.filter(
+            Q(participant_1=self.user) | Q(participant_2=self.user)
+        ).values_list('participant_1_id', 'participant_2_id')
+        req_pairs = ConnectRequest.objects.filter(
+            Q(sender=self.user) | Q(receiver=self.user),
+            status='accepted'
+        ).values_list('sender_id', 'receiver_id')
+
+        contact_ids = set()
+        for p1, p2 in conv_pairs:
+            contact_ids.add(p2 if p1 == self.user.id else p1)
+        for s_id, r_id in req_pairs:
+            contact_ids.add(r_id if s_id == self.user.id else s_id)
+        contact_ids.discard(self.user.id)
+        return list(contact_ids)
 
     async def broadcast_presence(self, is_online):
         contact_ids = await self.get_contact_ids()
@@ -393,13 +439,43 @@ class ChatConsumer(AsyncJsonWebsocketConsumer):
                 }
             )
 
+    async def get_conv_auth(self, conv_id):
+        if not conv_id:
+            return False, None
+        key = str(conv_id)
+        cached = self._conv_participants.get(key)
+        if cached is not None:
+            authorized, other_id, cached_at = cached
+            if (time.monotonic() - cached_at) < 30.0:
+                return authorized, other_id
+            self._conv_participants.pop(key, None)
+        authorized, other_id = await self._fetch_conv_auth(conv_id)
+        if authorized:
+            self._conv_participants[key] = (True, other_id, time.monotonic())
+        return authorized, other_id
+
     @database_sync_to_async
-    def is_participant(self, conv_id):
+    def _fetch_conv_auth(self, conv_id):
         try:
-            conv = Conversation.objects.get(id=conv_id)
-            return conv.participant_1_id == self.user.id or conv.participant_2_id == self.user.id
+            conv = Conversation.objects.select_related('participant_1', 'participant_2').only(
+                'id', 'participant_1_id', 'participant_2_id',
+                'participant_1__is_banned', 'participant_2__is_banned'
+            ).get(id=conv_id)
+            if conv.participant_1_id == self.user.id:
+                if conv.participant_1.is_banned or conv.participant_2.is_banned:
+                    return False, None
+                return True, conv.participant_2_id
+            if conv.participant_2_id == self.user.id:
+                if conv.participant_1.is_banned or conv.participant_2.is_banned:
+                    return False, None
+                return True, conv.participant_1_id
+            return False, None
         except (Conversation.DoesNotExist, ValueError):
-            return False
+            return False, None
+
+    async def is_participant(self, conv_id):
+        authorized, _ = await self.get_conv_auth(conv_id)
+        return authorized
 
     @database_sync_to_async
     def can_user_message(self, conv_id):

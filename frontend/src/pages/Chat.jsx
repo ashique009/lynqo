@@ -21,6 +21,42 @@ import useVoiceRecorder from '../hooks/useVoiceRecorder';
 import Loader from '../components/Loader';
 import Modal from '../components/Modal';
 import { getOptimizedImageUrl } from '../utils/imageUtils';
+import { getAuthenticatedMediaUrl } from '../utils/mediaUrl';
+
+const AuthenticatedReplyThumbnail = ({ rawUrl }) => {
+  const [src, setSrc] = useState(() =>
+    rawUrl && (rawUrl.startsWith('blob:') || rawUrl.startsWith('data:')) ? rawUrl : null
+  );
+
+  useEffect(() => {
+    let active = true;
+    if (!rawUrl) {
+      setSrc(null);
+      return;
+    }
+    if (rawUrl.startsWith('blob:') || rawUrl.startsWith('data:')) {
+      setSrc(rawUrl);
+      return;
+    }
+    getAuthenticatedMediaUrl(rawUrl)
+      .then((resolved) => {
+        if (active && resolved) setSrc(resolved);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [rawUrl]);
+
+  if (!src) return null;
+  return (
+    <img
+      src={src}
+      alt="Preview"
+      className="w-9 h-9 rounded-lg object-cover shrink-0 border border-slate-700"
+    />
+  );
+};
 
 const formatRecordingTime = (sec) => {
   if (!sec || isNaN(sec)) return '0:00';
@@ -94,6 +130,8 @@ export const Chat = () => {
   const isNearBottomRef = useRef(true);
   const activeConvIdRef = useRef(conversationId);
   activeConvIdRef.current = conversationId;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
 
   // 1. Load initial conversation details and message history
   useEffect(() => {
@@ -225,6 +263,15 @@ export const Chat = () => {
     const unsubConvUpdate = wsService.on('conversation_update', (data) => {
       const incomingMsg = data.message;
       if (incomingMsg && String(data.conversation_id) === String(activeConvIdRef.current)) {
+        const alreadyKnown = messagesRef.current.some(
+          (m) =>
+            (incomingMsg.id && m.id === incomingMsg.id) ||
+            (incomingMsg.client_message_id && m.client_message_id === incomingMsg.client_message_id)
+        );
+        if (alreadyKnown) {
+          return;
+        }
+
         setMessages((prev) => {
           const merged = mergeMessages(prev, [incomingMsg]);
           cacheSet(`conv_msgs_${activeConvIdRef.current}`, merged, 60);
@@ -387,10 +434,11 @@ export const Chat = () => {
     };
   }, [conversationId]);
 
-  // Sync missed messages
-  const syncMissedMessages = async (targetId = conversationId) => {
-    if (messages.length === 0) return;
-    const realMsgs = messages.filter((m) => m.id && !String(m.id).startsWith('temp-'));
+  // Sync missed messages (reads messagesRef to avoid stale closures on WS reconnect)
+  const syncMissedMessages = async (targetId = activeConvIdRef.current) => {
+    const currentMsgs = messagesRef.current || [];
+    if (currentMsgs.length === 0) return;
+    const realMsgs = currentMsgs.filter((m) => m.id && !String(m.id).startsWith('temp-'));
     if (realMsgs.length === 0) return;
     const latestId = Math.max(...realMsgs.map((m) => Number(m.id)));
     if (!latestId || !isFinite(latestId)) return;
@@ -937,6 +985,10 @@ export const Chat = () => {
           cacheSet(`conv_msgs_${currentId}`, merged, 60);
           return merged;
         });
+        // Safely revoke optimistic blob URL after server URL replaces it
+        setTimeout(() => {
+          try { URL.revokeObjectURL(localBlobUrl); } catch (_) {}
+        }, 1500);
       }
     } catch (err) {
       setMessages((prev) => {
@@ -1007,6 +1059,7 @@ export const Chat = () => {
         const bmp = await createImageBitmap(file);
         imgWidth = bmp.width;
         imgHeight = bmp.height;
+        bmp.close();
       }
     } catch {
       // fallback
@@ -1046,6 +1099,9 @@ export const Chat = () => {
           cacheSet(`conv_msgs_${currentId}`, merged, 60);
           return merged;
         });
+        setTimeout(() => {
+          try { URL.revokeObjectURL(localPreviewUrl); } catch (_) {}
+        }, 1500);
       }
     } catch (err) {
       setMessages((prev) => {
@@ -1278,10 +1334,8 @@ export const Chat = () => {
                 </div>
               </div>
               {(replyingTo.thumbnail_url || replyingTo.image_url || replyingTo.local_preview_url) && !replyingTo.is_deleted && (
-                <img
-                  src={replyingTo.thumbnail_url || replyingTo.image_url || replyingTo.local_preview_url}
-                  alt="Preview"
-                  className="w-9 h-9 rounded-lg object-cover shrink-0 border border-slate-700"
+                <AuthenticatedReplyThumbnail
+                  rawUrl={replyingTo.thumbnail_url || replyingTo.image_url || replyingTo.local_preview_url}
                 />
               )}
             </div>

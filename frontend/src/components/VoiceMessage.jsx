@@ -38,7 +38,7 @@ export const VoiceMessage = ({
     return bars;
   }, [message.id, message.client_message_id]);
 
-  // Clean up object URLs on unmount
+  // Clean up audio element on unmount; mediaUrl.js owns cached Blob URL lifecycle
   useEffect(() => {
     return () => {
       audioPlayerManager.stop(messageId);
@@ -47,12 +47,14 @@ export const VoiceMessage = ({
         audioRef.current.src = '';
         audioRef.current = null;
       }
-      if (blobUrlRef.current && blobUrlRef.current.startsWith('blob:')) {
-        URL.revokeObjectURL(blobUrlRef.current);
-        blobUrlRef.current = null;
-      }
+      blobUrlRef.current = null;
     };
   }, [messageId]);
+
+  // Reset local ref if message.audio_url transitions (e.g. optimistic blob -> server URL)
+  useEffect(() => {
+    blobUrlRef.current = null;
+  }, [message.audio_url]);
 
   // Pause this audio callback for audioPlayerManager
   const pauseSelf = useCallback(() => {
@@ -78,8 +80,11 @@ export const VoiceMessage = ({
       return message.audio_url;
     }
 
-    // Fetch through authenticated API client or cache
+    // Fetch through authenticated API client or cache (owned by mediaUrl.js)
     const objectUrl = await getAuthenticatedMediaUrl(message.audio_url);
+    if (!objectUrl) {
+      throw new Error('Failed to load authenticated audio.');
+    }
     blobUrlRef.current = objectUrl;
     return objectUrl;
   }, [message.audio_url]);

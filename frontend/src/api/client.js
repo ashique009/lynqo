@@ -57,6 +57,30 @@ export const isExternalUrl = (url) => {
   }
 };
 
+const PUBLIC_AUTH_PATHS = [
+  '/api/auth/login/',
+  '/api/auth/profile/create/',
+  '/api/auth/profile/recover/',
+  '/api/auth/admin/login/',
+];
+
+export const isPublicAuthRequest = (url) => {
+  if (!url || typeof url !== 'string') return false;
+  return PUBLIC_AUTH_PATHS.some((path) => url.includes(path));
+};
+
+export const isAuthFailureResponse = (status, data) => {
+  if (status === 401) return true;
+  if (status !== 403) return false;
+  const msg = typeof data?.message === 'string' ? data.message.toLowerCase() : '';
+  return (
+    msg.includes('invalid or expired session') ||
+    msg.includes('account is banned') ||
+    msg.includes('authentication credentials were not provided') ||
+    msg.includes('invalid token')
+  );
+};
+
 // Request Interceptor: Attach Token if available, ensure credentials sent only to LYNQO backend
 client.interceptors.request.use(
   (config) => {
@@ -64,6 +88,14 @@ client.interceptors.request.use(
     // strictly strip credentials and Authorization headers to prevent leakage and CORS issues.
     if (isExternalUrl(config.url)) {
       config.withCredentials = false;
+      if (config.headers) {
+        delete config.headers.Authorization;
+      }
+      return config;
+    }
+
+    // Do not attach stale Authorization headers to public login/registration/recovery endpoints
+    if (isPublicAuthRequest(config.url) || config.skipAuthHeader) {
       if (config.headers) {
         delete config.headers.Authorization;
       }
@@ -87,13 +119,24 @@ client.interceptors.response.use(
   },
   (error) => {
     const originalRequest = error.config;
-    if (error.response && (error.response.status === 401 || error.response.status === 403) && !originalRequest?._retry) {
-      localStorage.removeItem('lynqo_token');
-      localStorage.removeItem('lynqo_profile');
+    const status = error.response ? error.response.status : null;
+    const data = error.response && error.response.data ? error.response.data : null;
+
+    if (
+      status &&
+      !isPublicAuthRequest(originalRequest?.url) &&
+      isAuthFailureResponse(status, data) &&
+      !originalRequest?._retry
+    ) {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem('lynqo_token');
+        localStorage.removeItem('lynqo_profile');
+      }
       cacheInvalidate();
       if (
         typeof window !== 'undefined' &&
         window.location.pathname !== '/' &&
+        window.location.pathname !== '/login' &&
         !window.location.pathname.startsWith('/recover')
       ) {
         window.location.href = '/?session_expired=true';

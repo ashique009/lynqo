@@ -1,10 +1,17 @@
-import React, { createContext, useState, useEffect, useContext } from 'react';
+import React, { createContext, useState, useEffect, useContext, useCallback, useRef } from 'react';
+import { isAuthFailureResponse } from '../api/client';
 import { profileService } from '../services/profileService';
 import { wsService } from '../services/websocketService';
 import { cacheInvalidate, setCacheUserScope } from '../utils/cache';
 import { clearMediaCache } from '../utils/mediaUrl';
 
 const AuthContext = createContext(null);
+
+export const shouldClearAuthOnProfileError = (err) => {
+  if (!err || !err.status) return false; // Preserve session on offline / network / timeout errors
+  if (err.status === 429 || err.status >= 500) return false; // Preserve session on rate limits & server errors
+  return isAuthFailureResponse(err.status, err.data);
+};
 
 export const AuthProvider = ({ children }) => {
   const [token, setToken] = useState(() => localStorage.getItem('lynqo_token'));
@@ -24,7 +31,22 @@ export const AuthProvider = ({ children }) => {
     return Boolean(savedToken && !savedProfile);
   });
 
-  const fetchCurrentProfile = async (authToken) => {
+  const tokenRef = useRef(token);
+  tokenRef.current = token;
+
+  const clearAuth = useCallback(() => {
+    localStorage.removeItem('lynqo_token');
+    localStorage.removeItem('lynqo_profile');
+    setCacheUserScope(null);
+    cacheInvalidate();
+    clearMediaCache();
+    setToken(null);
+    setProfile(null);
+    wsService.disconnect();
+  }, []);
+
+  const fetchCurrentProfile = useCallback(async (authToken) => {
+    if (!authToken) return;
     try {
       const res = await profileService.getProfile();
       if (res.success && res.profile) {
@@ -32,17 +54,17 @@ export const AuthProvider = ({ children }) => {
         localStorage.setItem('lynqo_profile', JSON.stringify(res.profile));
         setCacheUserScope(res.profile.profile_id);
         wsService.connect(authToken);
-      } else {
+      } else if (res && res.success === false && isAuthFailureResponse(403, res)) {
         clearAuth();
       }
     } catch (err) {
-      if (!err.status || (err.status >= 400 && err.status < 500)) {
+      if (shouldClearAuthOnProfileError(err)) {
         clearAuth();
       }
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [clearAuth]);
 
   useEffect(() => {
     if (token) {
@@ -52,26 +74,33 @@ export const AuthProvider = ({ children }) => {
     } else {
       setIsLoading(false);
     }
-  }, [token]);
+  }, [token, fetchCurrentProfile]);
 
-  const clearAuth = () => {
-    localStorage.removeItem('lynqo_token');
-    localStorage.removeItem('lynqo_profile');
-    setCacheUserScope(null);
-    cacheInvalidate();
-    clearMediaCache();
-    setToken(null);
-    setProfile(null);
-    wsService.disconnect();
-  };
+  // Recover session and WebSocket safely when network reconnects
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleOnline = () => {
+      const activeToken = tokenRef.current;
+      if (activeToken) {
+        wsService.connect(activeToken);
+        fetchCurrentProfile(activeToken);
+      }
+    };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, [fetchCurrentProfile]);
 
   const login = async (username, password) => {
     setIsLoading(true);
     try {
+      // Clear any stale local credentials before fresh authentication
+      localStorage.removeItem('lynqo_token');
+      localStorage.removeItem('lynqo_profile');
       const res = await profileService.login(username, password);
       if (res.success) {
         const { token: newToken, profile: newProfile } = res;
         cacheInvalidate();
+        clearMediaCache();
         setCacheUserScope(newProfile?.profile_id);
         localStorage.setItem('lynqo_token', newToken);
         localStorage.setItem('lynqo_profile', JSON.stringify(newProfile));
@@ -91,10 +120,13 @@ export const AuthProvider = ({ children }) => {
   const createProfile = async (displayName, pictureFile, username = null, password = null) => {
     setIsLoading(true);
     try {
+      localStorage.removeItem('lynqo_token');
+      localStorage.removeItem('lynqo_profile');
       const res = await profileService.createProfile(displayName, pictureFile, username, password);
       if (res.success) {
         const { token: newToken, profile: newProfile, recovery_code } = res;
         cacheInvalidate();
+        clearMediaCache();
         setCacheUserScope(newProfile?.profile_id);
         localStorage.setItem('lynqo_token', newToken);
         localStorage.setItem('lynqo_profile', JSON.stringify(newProfile));
@@ -114,10 +146,13 @@ export const AuthProvider = ({ children }) => {
   const recoverProfile = async (recoveryCode, username = null, newPassword = null) => {
     setIsLoading(true);
     try {
+      localStorage.removeItem('lynqo_token');
+      localStorage.removeItem('lynqo_profile');
       const res = await profileService.recoverProfile(recoveryCode, username, newPassword);
       if (res.success) {
         const { token: newToken, profile: recoveredProfile, new_recovery_code } = res;
         cacheInvalidate();
+        clearMediaCache();
         setCacheUserScope(recoveredProfile?.profile_id);
         localStorage.setItem('lynqo_token', newToken);
         localStorage.setItem('lynqo_profile', JSON.stringify(recoveredProfile));
