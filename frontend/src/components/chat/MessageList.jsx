@@ -41,6 +41,7 @@ export const MessageList = React.memo(({
   onScroll,
   loadingOlder,
   isLoading,
+  isPositionReady = true,
   messages,
   unreadBannerInfo,
   otherUser,
@@ -89,6 +90,7 @@ export const MessageList = React.memo(({
     <div
       ref={chatContainerRef}
       onScroll={onScroll}
+      style={{ opacity: isLoading || messages.length === 0 || isPositionReady ? 1 : 0 }}
       className="flex-grow rounded-t-[24px] z-10 px-3 sm:px-4 md:px-6 pt-4 pb-28 overflow-y-auto overflow-x-hidden bg-transparent relative min-h-0 overscroll-contain"
     >
       {loadingOlder && (

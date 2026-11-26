@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Trash2, Copy, Edit2, Reply } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
@@ -43,6 +43,7 @@ export const Chat = () => {
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [newMessagesCount, setNewMessagesCount] = useState(0);
   const [unreadBannerInfo, setUnreadBannerInfo] = useState(null);
+  const [isPositionReady, setIsPositionReady] = useState(false);
 
   // Message Action Menu & Edit / Delete states
   const [activeMenuMessage, setActiveMenuMessage] = useState(null);
@@ -87,8 +88,8 @@ export const Chat = () => {
     setNewMessagesCount(0);
   }, []);
 
-  // Deterministic initial scroll positioning after React commits messages to DOM
-  useEffect(() => {
+  // Pre-paint deterministic initial scroll positioning (zero-flicker before browser paint)
+  useLayoutEffect(() => {
     const pending = pendingInitialScrollRef.current;
     if (!pending || isLoading || messages.length === 0) return;
     if (String(pending.convId) !== String(activeConvIdRef.current)) return;
@@ -115,17 +116,18 @@ export const Chat = () => {
       }
     } else {
       container.scrollTop = container.scrollHeight;
-      requestAnimationFrame(() => {
-        if (chatContainerRef.current) {
-          chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
-        }
-      });
       isNearBottomRef.current = true;
       setShowScrollBottom(false);
       setNewMessagesCount(0);
     }
 
-    if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+    container.style.opacity = '1';
+    setIsPositionReady(true);
+
+    if (
+      pending.markSeenOnReady &&
+      (typeof document === 'undefined' || document.visibilityState === 'visible')
+    ) {
       wsService.markSeen(pending.convId);
     }
   }, [messages, isLoading, unreadBannerInfo]);
@@ -196,13 +198,30 @@ export const Chat = () => {
       setConversation(null);
     }
 
-    const initialMessages = cachedMsgs || (passedConv?.last_message ? [passedConv.last_message] : []);
+    const initialMessages = cachedMsgs || [];
     setMessages(initialMessages);
-    setIsLoading(!cachedMsgs && !passedConv?.last_message);
+    setIsLoading(!cachedMsgs);
+    setIsPositionReady(false);
     setOtherUserTyping(false);
     setReplyingTo(null);
     setUnreadBannerInfo(null);
     setNewMessagesCount(0);
+
+    // If cached messages exist, schedule pre-paint positioning immediately so frame 1 is never at scrollTop=0
+    if (cachedMsgs && cachedMsgs.length > 0) {
+      const cachedUnread = cachedMsgs.find(
+        (m) => m.sender_profile_id !== profileRef.current?.profile_id && m.status !== 'seen' && !m.is_read
+      );
+      if (cachedUnread) {
+        const cachedUnreadCount = cachedMsgs.filter(
+          (m) => m.sender_profile_id !== profileRef.current?.profile_id && m.status !== 'seen' && !m.is_read
+        ).length;
+        setUnreadBannerInfo({ firstUnreadId: cachedUnread.id, count: cachedUnreadCount });
+        pendingInitialScrollRef.current = { type: 'unread', id: cachedUnread.id, convId: currentId, markSeenOnReady: false };
+      } else {
+        pendingInitialScrollRef.current = { type: 'bottom', convId: currentId, markSeenOnReady: false };
+      }
+    }
 
     wsService.joinConversation(currentId);
 
@@ -212,8 +231,8 @@ export const Chat = () => {
       if (initialPositionResolved) return;
       initialPositionResolved = true;
       pendingInitialScrollRef.current = firstUnreadId
-        ? { type: 'unread', id: firstUnreadId, convId: currentId }
-        : { type: 'bottom', convId: currentId };
+        ? { type: 'unread', id: firstUnreadId, convId: currentId, markSeenOnReady: true }
+        : { type: 'bottom', convId: currentId, markSeenOnReady: true };
     };
 
     const loadInitialData = async () => {
@@ -1160,6 +1179,7 @@ export const Chat = () => {
         onScroll={handleScroll}
         loadingOlder={loadingOlder}
         isLoading={isLoading}
+        isPositionReady={isPositionReady}
         messages={messages}
         unreadBannerInfo={unreadBannerInfo}
         otherUser={otherUser}
