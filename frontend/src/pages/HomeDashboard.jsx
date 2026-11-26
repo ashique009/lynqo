@@ -50,7 +50,7 @@ export const HomeDashboard = () => {
         if (convList.length > 0) {
           const topConvId = convList[0].id;
           if (!cacheGet(`conv_msgs_${topConvId}`)) {
-            chatService.getMessages(topConvId, { limit: 50 }).then((msgRes) => {
+            chatService.getMessages(topConvId, { limit: 50, mark_read: false }).then((msgRes) => {
               if (msgRes.success) {
                 cacheSet(`conv_msgs_${topConvId}`, msgRes.messages || [], 60);
               }

@@ -13,6 +13,7 @@ export const SwipeableMessageItem = React.memo(({
   isMe,
   isFirstInGroup = true,
   isLastInGroup = true,
+  optimizeOffscreen = true,
   isEditing,
   editingText,
   setEditingText,
@@ -179,7 +180,7 @@ export const SwipeableMessageItem = React.memo(({
     <div
       ref={rowRef}
       id={`msg-${message.id}`}
-      className={`message-row-opt flex flex-col group relative select-text ${isFirstInGroup ? 'mt-3' : 'mt-1'} ${isMe ? 'items-end' : 'items-start'}`}
+      className={`${optimizeOffscreen ? 'message-row-opt ' : ''}flex flex-col group relative select-text ${isFirstInGroup ? 'mt-3' : 'mt-1'} ${isMe ? 'items-end' : 'items-start'}`}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerEnd}

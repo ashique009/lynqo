@@ -41,6 +41,8 @@ export const Chat = () => {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [isWsConnected, setIsWsConnected] = useState(wsService.isConnected);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
+  const [newMessagesCount, setNewMessagesCount] = useState(0);
+  const [unreadBannerInfo, setUnreadBannerInfo] = useState(null);
 
   // Message Action Menu & Edit / Delete states
   const [activeMenuMessage, setActiveMenuMessage] = useState(null);
@@ -61,6 +63,7 @@ export const Chat = () => {
   const otherTypingTimeoutRef = useRef(null);
   const isNearBottomRef = useRef(true);
   const pendingImageFilesRef = useRef(new Map());
+  const pendingInitialScrollRef = useRef(null);
 
   // Refs for stable callbacks (prevents MessageList / SwipeableMessageItem re-renders)
   const activeConvIdRef = useRef(conversationId);
@@ -81,6 +84,63 @@ export const Chat = () => {
   const scrollToBottom = useCallback((behavior = 'auto') => {
     messagesEndRef.current?.scrollIntoView({ behavior });
     setShowScrollBottom(false);
+    setNewMessagesCount(0);
+  }, []);
+
+  // Deterministic initial scroll positioning after React commits messages to DOM
+  useEffect(() => {
+    const pending = pendingInitialScrollRef.current;
+    if (!pending || isLoading || messages.length === 0) return;
+    if (String(pending.convId) !== String(activeConvIdRef.current)) return;
+
+    const container = chatContainerRef.current;
+    if (!container) return;
+
+    pendingInitialScrollRef.current = null;
+
+    if (pending.type === 'unread') {
+      const targetEl =
+        document.getElementById('unread-divider') ||
+        document.getElementById(`msg-${pending.id}`);
+      if (targetEl) {
+        targetEl.scrollIntoView({ behavior: 'auto', block: 'start' });
+        const fromBottom =
+          container.scrollHeight - container.scrollTop - container.clientHeight;
+        isNearBottomRef.current = fromBottom < 100;
+        setShowScrollBottom(fromBottom >= 150);
+      } else {
+        container.scrollTop = container.scrollHeight;
+        isNearBottomRef.current = true;
+        setShowScrollBottom(false);
+      }
+    } else {
+      container.scrollTop = container.scrollHeight;
+      requestAnimationFrame(() => {
+        if (chatContainerRef.current) {
+          chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+        }
+      });
+      isNearBottomRef.current = true;
+      setShowScrollBottom(false);
+      setNewMessagesCount(0);
+    }
+
+    if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+      wsService.markSeen(pending.convId);
+    }
+  }, [messages, isLoading, unreadBannerInfo]);
+
+  // Preserve bottom position when mobile keyboard opens while near bottom
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const onViewportResize = () => {
+      if (isNearBottomRef.current) {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      }
+    };
+    vv.addEventListener('resize', onViewportResize);
+    return () => vv.removeEventListener('resize', onViewportResize);
   }, []);
 
   // Sync missed messages (reads messagesRef to avoid stale closures on WS reconnect)
@@ -93,7 +153,7 @@ export const Chat = () => {
     if (!latestId || !isFinite(latestId)) return;
 
     try {
-      const res = await chatService.getMessages(targetId, { since_id: latestId });
+      const res = await chatService.getMessages(targetId, { since_id: latestId, mark_read: false });
       if (res.success && res.messages?.length > 0 && activeConvIdRef.current === targetId) {
         setMessages((prev) => {
           if (activeConvIdRef.current !== targetId) return prev;
@@ -101,7 +161,20 @@ export const Chat = () => {
           cacheSet(`conv_msgs_${targetId}`, merged, 60);
           return merged;
         });
-        if (isNearBottomRef.current) setTimeout(() => scrollToBottom('smooth'), 50);
+        if (isNearBottomRef.current) {
+          setTimeout(() => scrollToBottom('smooth'), 50);
+          if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+            wsService.markSeen(targetId);
+          }
+        } else {
+          const incomingCount = res.messages.filter(
+            (m) => m.sender_profile_id !== profileRef.current?.profile_id && !m.is_read && m.status !== 'seen'
+          ).length;
+          if (incomingCount > 0) {
+            setNewMessagesCount((c) => c + incomingCount);
+            setShowScrollBottom(true);
+          }
+        }
       }
     } catch (e) {
       console.warn('Sync missed messages failed:', e);
@@ -128,10 +201,23 @@ export const Chat = () => {
     setIsLoading(!cachedMsgs && !passedConv?.last_message);
     setOtherUserTyping(false);
     setReplyingTo(null);
+    setUnreadBannerInfo(null);
+    setNewMessagesCount(0);
 
     wsService.joinConversation(currentId);
 
+    let initialPositionResolved = false;
+
+    const scheduleInitialPosition = (firstUnreadId) => {
+      if (initialPositionResolved) return;
+      initialPositionResolved = true;
+      pendingInitialScrollRef.current = firstUnreadId
+        ? { type: 'unread', id: firstUnreadId, convId: currentId }
+        : { type: 'bottom', convId: currentId };
+    };
+
     const loadInitialData = async () => {
+      let resolvedFirstUnreadId = null;
       try {
         const cachedConvData = location.state?.conversation || cacheGet(`conv_detail_${currentId}`);
         const latestCachedMsgs = cacheGet(`conv_msgs_${currentId}`);
@@ -141,12 +227,12 @@ export const Chat = () => {
           const realMsgs = latestCachedMsgs.filter((m) => m.id && !String(m.id).startsWith('temp-'));
           const latestId = realMsgs.length > 0 ? Math.max(...realMsgs.map((m) => Number(m.id))) : null;
           if (latestId && isFinite(latestId)) {
-            msgPromise = chatService.getMessages(currentId, { since_id: latestId });
+            msgPromise = chatService.getMessages(currentId, { since_id: latestId, mark_read: false });
           } else {
-            msgPromise = chatService.getMessages(currentId, { limit: 50 });
+            msgPromise = chatService.getMessages(currentId, { limit: 50, mark_read: false });
           }
         } else {
-          msgPromise = chatService.getMessages(currentId, { limit: 50 });
+          msgPromise = chatService.getMessages(currentId, { limit: 50, mark_read: false });
         }
 
         const convPromise = cachedConvData
@@ -164,24 +250,65 @@ export const Chat = () => {
           cacheSet(`conv_detail_${currentId}`, convRes.conversation, 120);
         }
         if (msgRes.success) {
-          const msgs = msgRes.messages || [];
-          if (msgs.length > 0) {
-            setMessages((prev) => {
-              if (!isCurrent || activeConvIdRef.current !== currentId) return prev;
-              const merged = mergeMessages(prev, msgs);
-              cacheSet(`conv_msgs_${currentId}`, merged, 60);
-              return merged;
-            });
+          let msgs = msgRes.messages || [];
+          let firstUnreadId = msgRes.first_unread_id || null;
+          let unreadCount = msgRes.unread_count || 0;
 
-            const incomingUnread = msgs.filter(
-              (m) => m.sender_profile_id !== profileRef.current?.profile_id && m.status === 'sent'
+          // Fallback: check merged messages if backend metadata was absent
+          let combinedMsgs = mergeMessages(messagesRef.current || [], msgs);
+          if (!firstUnreadId && combinedMsgs.length > 0) {
+            const firstLocalUnread = combinedMsgs.find(
+              (m) =>
+                m.sender_profile_id !== profileRef.current?.profile_id &&
+                m.status !== 'seen' &&
+                !m.is_read
             );
-            if (incomingUnread.length > 0) {
-              wsService.markDelivered(currentId, incomingUnread.map((m) => m.id));
+            if (firstLocalUnread) {
+              firstUnreadId = firstLocalUnread.id;
+              unreadCount = combinedMsgs.filter(
+                (m) =>
+                  m.sender_profile_id !== profileRef.current?.profile_id &&
+                  m.status !== 'seen' &&
+                  !m.is_read
+              ).length;
             }
           }
-          if (msgRes.has_more !== undefined) {
+
+          // If first unread message is outside the loaded page (>50 unread), load around_id
+          if (firstUnreadId && !combinedMsgs.some((m) => m.id === firstUnreadId)) {
+            const aroundRes = await chatService.getMessages(currentId, {
+              around_id: firstUnreadId,
+              limit: 60,
+              mark_read: false,
+            });
+            if (!isCurrent || activeConvIdRef.current !== currentId) return;
+            if (aroundRes.success && aroundRes.messages?.length > 0) {
+              combinedMsgs = aroundRes.messages;
+              if (aroundRes.has_more !== undefined) {
+                setHasMore(aroundRes.has_more);
+              }
+            }
+          } else if (msgRes.has_more !== undefined) {
             setHasMore(msgRes.has_more);
+          }
+
+          if (combinedMsgs.length > 0) {
+            setMessages(combinedMsgs);
+            cacheSet(`conv_msgs_${currentId}`, combinedMsgs, 60);
+
+            const incomingUndelivered = combinedMsgs.filter(
+              (m) => m.sender_profile_id !== profileRef.current?.profile_id && m.status === 'sent'
+            );
+            if (incomingUndelivered.length > 0) {
+              wsService.markDelivered(currentId, incomingUndelivered.map((m) => m.id));
+            }
+          }
+
+          if (firstUnreadId && unreadCount > 0) {
+            resolvedFirstUnreadId = firstUnreadId;
+            setUnreadBannerInfo({ firstUnreadId, count: unreadCount });
+          } else {
+            setUnreadBannerInfo(null);
           }
         }
       } catch (err) {
@@ -190,7 +317,7 @@ export const Chat = () => {
       } finally {
         if (isCurrent && activeConvIdRef.current === currentId) {
           setIsLoading(false);
-          setTimeout(scrollToBottom, 40);
+          scheduleInitialPosition(resolvedFirstUnreadId);
         }
       }
     };
@@ -215,13 +342,18 @@ export const Chat = () => {
 
         if (incomingMsg.sender_profile_id !== profileRef.current?.profile_id) {
           wsService.markDelivered(activeConvIdRef.current, [incomingMsg.id]);
-          wsService.markSeen(activeConvIdRef.current);
+          if (isNearBottomRef.current && (typeof document === 'undefined' || document.visibilityState === 'visible')) {
+            wsService.markSeen(activeConvIdRef.current);
+          }
         }
 
         if (isNearBottomRef.current) {
-          setTimeout(scrollToBottom, 50);
+          setTimeout(() => scrollToBottom('smooth'), 50);
         } else {
           setShowScrollBottom(true);
+          if (incomingMsg.sender_profile_id !== profileRef.current?.profile_id) {
+            setNewMessagesCount((c) => c + 1);
+          }
         }
       }
     });
@@ -246,13 +378,18 @@ export const Chat = () => {
 
         if (incomingMsg.sender_profile_id !== profileRef.current?.profile_id) {
           wsService.markDelivered(activeConvIdRef.current, [incomingMsg.id]);
-          wsService.markSeen(activeConvIdRef.current);
+          if (isNearBottomRef.current && (typeof document === 'undefined' || document.visibilityState === 'visible')) {
+            wsService.markSeen(activeConvIdRef.current);
+          }
         }
 
         if (isNearBottomRef.current) {
-          setTimeout(scrollToBottom, 50);
+          setTimeout(() => scrollToBottom('smooth'), 50);
         } else {
           setShowScrollBottom(true);
+          if (incomingMsg.sender_profile_id !== profileRef.current?.profile_id) {
+            setNewMessagesCount((c) => c + 1);
+          }
         }
       }
     });
@@ -504,7 +641,7 @@ export const Chat = () => {
 
     const currentId = activeConvIdRef.current;
     try {
-      const res = await chatService.getMessages(currentId, { around_id: targetId, limit: 30 });
+      const res = await chatService.getMessages(currentId, { around_id: targetId, limit: 30, mark_read: false });
       if (res.success && res.messages?.length > 0 && activeConvIdRef.current === currentId) {
         setMessages((prev) => {
           if (activeConvIdRef.current !== currentId) return prev;
@@ -668,7 +805,7 @@ export const Chat = () => {
     }
 
     try {
-      const res = await chatService.getMessages(targetId, { before_id: oldestMsg.id, limit: 30 });
+      const res = await chatService.getMessages(targetId, { before_id: oldestMsg.id, limit: 30, mark_read: false });
       if (res.success && activeConvIdRef.current === targetId) {
         setMessages((prev) => {
           if (activeConvIdRef.current !== targetId) return prev;
@@ -697,8 +834,18 @@ export const Chat = () => {
   const handleScroll = useCallback((e) => {
     const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
     const fromBottom = scrollHeight - scrollTop - clientHeight;
-    isNearBottomRef.current = fromBottom < 100;
+    const nowNearBottom = fromBottom < 100;
+    isNearBottomRef.current = nowNearBottom;
     setShowScrollBottom(fromBottom >= 150);
+
+    if (nowNearBottom) {
+      setNewMessagesCount((prev) => {
+        if (prev > 0 && activeConvIdRef.current) {
+          wsService.markSeen(activeConvIdRef.current);
+        }
+        return 0;
+      });
+    }
 
     if (scrollTop < 50 && hasMoreRef.current && !loadingOlderRef.current) {
       loadOlderMessages();
@@ -988,7 +1135,12 @@ export const Chat = () => {
   }, [sendImageFile, showToast]);
 
   const handleBack = useCallback(() => navigate('/dashboard'), [navigate]);
-  const handleScrollBottomClick = useCallback(() => scrollToBottom('smooth'), [scrollToBottom]);
+  const handleScrollBottomClick = useCallback(() => {
+    scrollToBottom('smooth');
+    if (activeConvIdRef.current) {
+      wsService.markSeen(activeConvIdRef.current);
+    }
+  }, [scrollToBottom]);
   const handleComposerError = useCallback((msg) => showToast(msg, 'error'), [showToast]);
 
   const otherUser = conversation?.other_participant;
@@ -1009,6 +1161,7 @@ export const Chat = () => {
         loadingOlder={loadingOlder}
         isLoading={isLoading}
         messages={messages}
+        unreadBannerInfo={unreadBannerInfo}
         otherUser={otherUser}
         otherUserTyping={otherUserTyping}
         currentProfileId={profile?.profile_id}
@@ -1032,6 +1185,7 @@ export const Chat = () => {
 
       <ScrollToBottomButton
         visible={showScrollBottom}
+        unreadCount={newMessagesCount}
         onClick={handleScrollBottomClick}
       />
 

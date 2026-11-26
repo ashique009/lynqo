@@ -19,6 +19,7 @@ export const chatService = {
     if (params.before_id) query.append('before_id', params.before_id);
     if (params.since_id) query.append('since_id', params.since_id);
     if (params.around_id) query.append('around_id', params.around_id);
+    if (params.mark_read !== undefined) query.append('mark_read', params.mark_read ? '1' : '0');
     const qs = query.toString() ? `?${query.toString()}` : '';
     return client.get(`/api/auth/conversations/${conversationId}/messages/${qs}`);
   },

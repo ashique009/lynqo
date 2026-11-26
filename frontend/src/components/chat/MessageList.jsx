@@ -42,6 +42,7 @@ export const MessageList = React.memo(({
   loadingOlder,
   isLoading,
   messages,
+  unreadBannerInfo,
   otherUser,
   otherUserTyping,
   currentProfileId,
@@ -64,12 +65,22 @@ export const MessageList = React.memo(({
 }) => {
   const [renderLimit, setRenderLimit] = useState(INITIAL_RENDER_WINDOW);
 
-  // Keep render window bounded on long conversations while allowing upward expansion
+  // Keep render window bounded on long conversations while ensuring firstUnreadId is visible
   useEffect(() => {
+    if (unreadBannerInfo?.firstUnreadId) {
+      const idx = messages.findIndex((m) => m.id === unreadBannerInfo.firstUnreadId);
+      if (idx !== -1) {
+        const needed = messages.length - idx + 20;
+        if (needed > renderLimit) {
+          setRenderLimit(needed);
+          return;
+        }
+      }
+    }
     if (messages.length <= INITIAL_RENDER_WINDOW && renderLimit !== INITIAL_RENDER_WINDOW) {
       setRenderLimit(INITIAL_RENDER_WINDOW);
     }
-  }, [messages.length, renderLimit]);
+  }, [messages, unreadBannerInfo, renderLimit]);
 
   const hiddenCount = Math.max(0, messages.length - renderLimit);
   const visibleMessages = hiddenCount > 0 ? messages.slice(hiddenCount) : messages;
@@ -142,11 +153,22 @@ export const MessageList = React.memo(({
                   </span>
                 </div>
               )}
+              {unreadBannerInfo?.firstUnreadId && msg.id === unreadBannerInfo.firstUnreadId && (
+                <div id="unread-divider" className="flex items-center gap-3 my-3 px-1">
+                  <div className="h-px flex-1 bg-gradient-to-r from-transparent to-white/20" />
+                  <span className="px-3.5 py-1 rounded-full bg-[#2A1E42]/85 border border-white/15 text-[12px] font-medium text-[#E9D5FF] shadow-xs">
+                    {unreadBannerInfo.count}{' '}
+                    {unreadBannerInfo.count === 1 ? 'unread message' : 'unread messages'}
+                  </span>
+                  <div className="h-px flex-1 bg-gradient-to-l from-transparent to-white/20" />
+                </div>
+              )}
               <SwipeableMessageItem
                 message={msg}
                 isMe={isMe}
                 isFirstInGroup={!sameAsPrev}
                 isLastInGroup={!sameAsNext}
+                optimizeOffscreen={index < visibleMessages.length - 20}
                 isEditing={isEditing}
                 editingText={isEditing ? editingText : ''}
                 setEditingText={setEditingText}
