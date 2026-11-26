@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, Download, ZoomIn, ZoomOut, RotateCcw, Loader2, AlertCircle } from 'lucide-react';
-import { getAuthenticatedMediaUrl } from '../utils/mediaUrl';
+import { getAuthenticatedMediaUrl, acquireMediaUrl, releaseMediaUrl } from '../utils/mediaUrl';
 import client, { isExternalUrl } from '../api/client';
 
 export const ImageViewerModal = ({ message, onClose }) => {
@@ -40,11 +40,14 @@ export const ImageViewerModal = ({ message, onClose }) => {
 
     setHasError(false);
     setIsLoaded(false);
+    let acquired = false;
 
     getAuthenticatedMediaUrl(rawUrl)
       .then((url) => {
         if (isMounted) {
           if (url) {
+            acquireMediaUrl(rawUrl);
+            acquired = true;
             setFullSrc(url);
             setHasError(false);
           } else {
@@ -60,6 +63,9 @@ export const ImageViewerModal = ({ message, onClose }) => {
 
     return () => {
       isMounted = false;
+      if (acquired) {
+        releaseMediaUrl(rawUrl);
+      }
     };
   }, [rawUrl]);
 

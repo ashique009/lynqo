@@ -135,6 +135,7 @@ def generate_recovery_code(profile_id):
 # ============================================================================
 
 class LoginView(APIView):
+    authentication_classes = []
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
@@ -205,6 +206,7 @@ class LoginView(APIView):
 
 
 class ProfileCreateView(APIView):
+    authentication_classes = []
     permission_classes = [permissions.AllowAny]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
@@ -277,6 +279,7 @@ class ProfileCreateView(APIView):
 
 
 class ProfileRecoverView(APIView):
+    authentication_classes = []
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
@@ -977,22 +980,44 @@ class MessageListView(APIView):
         before_id = request.query_params.get('before_id')
         since_id = request.query_params.get('since_id')
         around_id = request.query_params.get('around_id')
+        mark_read = request.query_params.get('mark_read', '1') != '0'
 
         qs = Message.objects.filter(conversation=conv).exclude(deleted_for=request.user).select_related(
             'sender__profile', 'conversation', 'reply_to', 'reply_to__sender__profile'
-        ).prefetch_related('reply_to__deleted_for')
+        ).prefetch_related(
+            models.Prefetch(
+                'reply_to__deleted_for',
+                queryset=User.objects.only('id'),
+                to_attr='prefetched_deleted_for'
+            )
+        )
+
+        # Compute unread metadata in 1 aggregate query when deferring read-marking (smart chat opening)
+        unread_count = 0
+        first_unread_id = None
+        if not mark_read:
+            unread_agg = qs.filter(is_read=False).exclude(sender=request.user).aggregate(
+                unread_count=models.Count('id'),
+                first_unread_id=models.Min('id'),
+            )
+            unread_count = unread_agg['unread_count'] or 0
+            first_unread_id = unread_agg['first_unread_id']
 
         if around_id:
             try:
                 target_id = int(around_id)
                 half = limit // 2
-                before_qs = list(qs.filter(id__lte=target_id).order_by('-id')[:half + 1])
+                before_raw = list(qs.filter(id__lte=target_id).order_by('-id')[:half + 2])
+                has_more = len(before_raw) > half + 1
+                before_qs = before_raw[:half + 1]
                 after_qs = list(qs.filter(id__gt=target_id).order_by('id')[:half])
                 combined = sorted(before_qs + after_qs, key=lambda m: (m.created_at, m.id))
                 return Response({
                     'success': True,
                     'messages': MessageSerializer(combined, many=True, context={'request': request}).data,
-                    'has_more': False,
+                    'has_more': has_more,
+                    'unread_count': unread_count,
+                    'first_unread_id': first_unread_id,
                 })
             except (ValueError, TypeError):
                 pass
@@ -1006,29 +1031,32 @@ class MessageListView(APIView):
         has_more = len(raw_messages) > limit
         messages = list(reversed(raw_messages[:limit]))
 
-        # Mark messages as seen if unread
-        unread_ids = [m.id for m in messages if not m.is_read and m.sender_id != request.user.id]
-        if unread_ids:
-            Message.objects.filter(id__in=unread_ids).update(status='seen', is_read=True)
-            for m in messages:
-                if m.id in unread_ids:
-                    m.status = 'seen'
-                    m.is_read = True
-            channel_layer = get_channel_layer()
-            if channel_layer:
-                async_to_sync(channel_layer.group_send)(
-                    f"conv_{conv.id}",
-                    {
-                        'type': 'broadcast_messages_seen',
-                        'conversation_id': conv.id,
-                        'seen_by_profile_id': request.user.profile.profile_id,
-                    }
-                )
+        # Mark messages as seen if unread and mark_read is enabled
+        if mark_read:
+            unread_ids = [m.id for m in messages if not m.is_read and m.sender_id != request.user.id]
+            if unread_ids:
+                Message.objects.filter(id__in=unread_ids).update(status='seen', is_read=True)
+                for m in messages:
+                    if m.id in unread_ids:
+                        m.status = 'seen'
+                        m.is_read = True
+                channel_layer = get_channel_layer()
+                if channel_layer:
+                    async_to_sync(channel_layer.group_send)(
+                        f"conv_{conv.id}",
+                        {
+                            'type': 'broadcast_messages_seen',
+                            'conversation_id': conv.id,
+                            'seen_by_profile_id': request.user.profile.profile_id,
+                        }
+                    )
 
         return Response({
             'success': True,
             'messages': MessageSerializer(messages, many=True, context={'request': request}).data,
             'has_more': has_more,
+            'unread_count': unread_count,
+            'first_unread_id': first_unread_id,
         })
 
 

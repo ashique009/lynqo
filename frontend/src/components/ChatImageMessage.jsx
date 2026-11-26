@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Loader2, RefreshCw, ZoomIn, AlertCircle } from 'lucide-react';
-import { getAuthenticatedMediaUrl } from '../utils/mediaUrl';
+import { getAuthenticatedMediaUrl, acquireMediaUrl, releaseMediaUrl } from '../utils/mediaUrl';
 
-export const ChatImageMessage = ({
+export const ChatImageMessage = React.memo(({
   message,
   isMe,
   onImageClick,
@@ -38,11 +38,14 @@ export const ChatImageMessage = ({
       return;
     }
 
+    let acquired = false;
     setLoadError(false);
     getAuthenticatedMediaUrl(rawUrl)
       .then((url) => {
         if (isMounted) {
           if (url) {
+            acquireMediaUrl(rawUrl);
+            acquired = true;
             setResolvedSrc(url);
             setLoadError(false);
           } else {
@@ -58,6 +61,9 @@ export const ChatImageMessage = ({
 
     return () => {
       isMounted = false;
+      if (acquired) {
+        releaseMediaUrl(rawUrl);
+      }
     };
   }, [rawUrl]);
 
@@ -168,6 +174,6 @@ export const ChatImageMessage = ({
       </div>
     </div>
   );
-};
+});
 
 export default ChatImageMessage;

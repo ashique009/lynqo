@@ -1853,3 +1853,164 @@ class RealtimeMessagingAndPresenceTests(TestCase):
         remove_user_channel(user.id, "chan_ser_1")
         ser3 = ProfilePublicSerializer(profile).data
         self.assertFalse(ser3['is_online'])
+
+
+class Phase1ReliabilityAndQueryTests(TransactionTestCase):
+    def setUp(self):
+        from rest_framework.test import APIClient
+        cache.clear()
+        self.client = APIClient()
+        self.user_a = User.objects.create_user(username="p1_alice", password="secret123", full_name="Alice")
+        self.profile_a = Profile.objects.create(user=self.user_a, profile_id="LYNQ-P1A", display_name="Alice")
+        self.user_b = User.objects.create_user(username="p1_bob", password="secret123", full_name="Bob")
+        self.profile_b = Profile.objects.create(user=self.user_b, profile_id="LYNQ-P1B", display_name="Bob")
+        self.user_c = User.objects.create_user(username="p1_charlie", password="secret123", full_name="Charlie")
+        self.profile_c = Profile.objects.create(user=self.user_c, profile_id="LYNQ-P1C", display_name="Charlie")
+        self.conv = Conversation.objects.create(participant_1=self.user_a, participant_2=self.user_b)
+
+    def test_fresh_login_succeeds_with_stale_token_header_or_cookie(self):
+        """Stale Authorization header or cookie must not block fresh login/create/recover."""
+        self.client.cookies['lynqo_session'] = 'stale_dead_cookie_token'
+        resp = self.client.post(
+            '/api/auth/login/',
+            {'username': 'p1_alice', 'password': 'secret123'},
+            format='json',
+            HTTP_AUTHORIZATION='Bearer stale_dead_bearer_token'
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(resp.data['success'])
+        self.assertIn('token', resp.data)
+
+    def test_message_list_reply_prefetch_avoids_n_plus_1(self):
+        """MessageListView with reply_to messages uses Prefetch without N+1 queries per reply."""
+        sess_a = ProfileSession.create_session(self.user_a)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {sess_a.token}')
+
+        # Create 10 messages each replying to a previous message
+        prev_msg = Message.objects.create(conversation=self.conv, sender=self.user_b, content="Root msg")
+        for i in range(10):
+            prev_msg = Message.objects.create(
+                conversation=self.conv,
+                sender=self.user_a,
+                content=f"Reply {i}",
+                reply_to=prev_msg
+            )
+
+        from django.test.utils import CaptureQueriesContext
+        from django.db import connection
+        with CaptureQueriesContext(connection) as ctx:
+            resp = self.client.get(f'/api/auth/conversations/{self.conv.id}/messages/?limit=50')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(len(resp.data['messages']), 11)
+        # Should be <= 8 queries total (auth + conv + msgs + prefetch + count/etc), NOT 11+ N+1 queries
+        self.assertLessEqual(len(ctx), 8)
+
+    def test_ws_batched_presence_and_deduplicated_multi_device_delivery(self):
+        """WS connect batches contact presence queries, enforces conv auth, and deduplicates broadcasts."""
+        from channels.testing import WebsocketCommunicator
+        from config.asgi import application
+        from asgiref.sync import async_to_sync
+        from django.test.utils import CaptureQueriesContext
+        from django.db import connection
+
+        # Add extra contacts for Alice
+        for i in range(5):
+            u = User.objects.create(username=f"p1_extra_{i}")
+            Profile.objects.create(user=u, profile_id=f"LYNQ-EX{i}", display_name=f"Extra {i}")
+            Conversation.objects.create(participant_1=self.user_a, participant_2=u)
+
+        sess_a = ProfileSession.create_session(self.user_a)
+        sess_b = ProfileSession.create_session(self.user_b)
+        sess_c = ProfileSession.create_session(self.user_c)
+
+        # Verify batched contact presence & cached participant auth query counts
+        from accounts.consumers import ChatConsumer
+        consumer = ChatConsumer()
+        consumer.user = self.user_a
+        consumer._conv_participants = {}
+        with CaptureQueriesContext(connection) as batch_ctx:
+            cids = consumer.get_contact_ids.__wrapped__(consumer)
+            info = consumer.get_contacts_profile_info_batch.__wrapped__(consumer, cids)
+        self.assertEqual(len(info), 6)
+        self.assertLessEqual(len(batch_ctx), 3)
+
+        with CaptureQueriesContext(connection) as first_ctx:
+            auth1, other1 = consumer._fetch_conv_auth.__wrapped__(consumer, self.conv.id)
+        self.assertTrue(auth1)
+        self.assertEqual(other1, self.user_b.id)
+        self.assertEqual(len(first_ctx), 1)
+        consumer._conv_participants[str(self.conv.id)] = (auth1, other1, __import__('time').monotonic())
+
+        with CaptureQueriesContext(connection) as cached_ctx:
+            auth2, other2 = async_to_sync(consumer.get_conv_auth)(self.conv.id)
+        self.assertTrue(auth2)
+        self.assertEqual(other2, self.user_b.id)
+        self.assertEqual(len(cached_ctx), 0)
+
+        async def run_ws():
+            comm_a1 = WebsocketCommunicator(application, f"/ws/chat/?token={sess_a.token}")
+            comm_a2 = WebsocketCommunicator(application, f"/ws/chat/?token={sess_a.token}")
+            comm_b = WebsocketCommunicator(application, f"/ws/chat/?token={sess_b.token}")
+            comm_c = WebsocketCommunicator(application, f"/ws/chat/?token={sess_c.token}")
+
+            ok_a1, _ = await comm_a1.connect()
+            self.assertTrue(ok_a1)
+            ok_a2, _ = await comm_a2.connect()
+            ok_b, _ = await comm_b.connect()
+            ok_c, _ = await comm_c.connect()
+            self.assertTrue(ok_a2 and ok_b and ok_c)
+
+            # Drain initial presence_update frames
+            for comm in (comm_a1, comm_a2, comm_b, comm_c):
+                while not await comm.receive_nothing(timeout=0.05):
+                    await comm.receive_json_from()
+
+            # Join conv for Alice (tab 1) and Bob
+            await comm_a1.send_json_to({'type': 'join_conversation', 'conversation_id': self.conv.id})
+            await comm_b.send_json_to({'type': 'join_conversation', 'conversation_id': self.conv.id})
+            # Unauthorized user Charlie tries to join & type
+            await comm_c.send_json_to({'type': 'join_conversation', 'conversation_id': self.conv.id})
+            await comm_c.send_json_to({'type': 'typing', 'conversation_id': self.conv.id, 'is_typing': True})
+
+            # Drain join ACKs
+            ack_a1 = await comm_a1.receive_json_from()
+            self.assertEqual(ack_a1['type'], 'joined_conversation')
+            ack_b = await comm_b.receive_json_from()
+            self.assertEqual(ack_b['type'], 'joined_conversation')
+            # Charlie must NOT receive joined_conversation
+            self.assertTrue(await comm_c.receive_nothing(timeout=0.05))
+
+            # Alice sends message from tab 1
+            await comm_a1.send_json_to({
+                'type': 'chat_message',
+                'conversation_id': self.conv.id,
+                'content': 'Hello multi-device!',
+                'client_message_id': 'p1-ws-1',
+            })
+
+            # Bob should receive EXACTLY ONE new_message (plus 1 conversation_update)
+            bob_events = []
+            while not await comm_b.receive_nothing(timeout=0.1):
+                bob_events.append(await comm_b.receive_json_from())
+            bob_new_msgs = [e for e in bob_events if e.get('type') == 'new_message']
+            self.assertEqual(len(bob_new_msgs), 1)
+            self.assertEqual(bob_new_msgs[0]['message']['content'], 'Hello multi-device!')
+
+            # Alice's 2nd tab should also receive EXACTLY ONE new_message
+            a2_events = []
+            while not await comm_a2.receive_nothing(timeout=0.1):
+                a2_events.append(await comm_a2.receive_json_from())
+            a2_new_msgs = [e for e in a2_events if e.get('type') == 'new_message']
+            self.assertEqual(len(a2_new_msgs), 1)
+
+            # Cached typing works without DB errors
+            await comm_a1.send_json_to({'type': 'typing', 'conversation_id': self.conv.id, 'is_typing': True})
+            typing_evt = await comm_b.receive_json_from()
+            self.assertEqual(typing_evt['type'], 'typing_indicator')
+
+            await comm_a1.disconnect()
+            await comm_a2.disconnect()
+            await comm_b.disconnect()
+            await comm_c.disconnect()
+
+        async_to_sync(run_ws)()

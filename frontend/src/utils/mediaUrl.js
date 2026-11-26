@@ -1,39 +1,87 @@
 import client, { API_BASE_URL, isExternalUrl } from '../api/client.js';
 
-// LRU cache for authenticated object URLs: rawUrl -> { objectUrl, lastUsed, isCustomBlob }
+// LRU cache for authenticated object URLs: rawUrl -> { objectUrl, lastUsed, sizeBytes, activeRefs }
 const mediaBlobCache = new Map();
 const inFlightRequests = new Map();
+const pendingRevokeByUrl = new Map();
 const MAX_CACHE_ENTRIES = 80;
+const MAX_CACHE_BYTES = 48 * 1024 * 1024; // 48 MB memory ceiling for mobile browsers
+let totalCacheBytes = 0;
 
-const storeInCache = (key, objectUrl) => {
-  if (mediaBlobCache.size >= MAX_CACHE_ENTRIES) {
+const safeRevoke = (objectUrl) => {
+  if (objectUrl && objectUrl.startsWith('blob:')) {
+    try {
+      URL.revokeObjectURL(objectUrl);
+    } catch (_) {}
+  }
+};
+
+const evictIfNeeded = () => {
+  while (
+    (mediaBlobCache.size >= MAX_CACHE_ENTRIES || totalCacheBytes > MAX_CACHE_BYTES) &&
+    mediaBlobCache.size > 0
+  ) {
     let oldestKey = null;
     let oldestTime = Infinity;
     for (const [k, v] of mediaBlobCache.entries()) {
-      if (v.lastUsed < oldestTime) {
+      // Prefer evicting inactive entries first so mounted/playing media stays alive
+      if (v.activeRefs === 0 && v.lastUsed < oldestTime) {
         oldestTime = v.lastUsed;
         oldestKey = k;
       }
     }
-    if (oldestKey) {
-      const oldEntry = mediaBlobCache.get(oldestKey);
-      if (oldEntry?.objectUrl && oldEntry.objectUrl.startsWith('blob:')) {
-        try {
-          URL.revokeObjectURL(oldEntry.objectUrl);
-        } catch (e) {
-          // ignore
-        }
-      }
-      mediaBlobCache.delete(oldestKey);
+    if (!oldestKey) {
+      // All entries are actively referenced; stop evicting to protect active media
+      break;
     }
+    const oldEntry = mediaBlobCache.get(oldestKey);
+    mediaBlobCache.delete(oldestKey);
+    totalCacheBytes = Math.max(0, totalCacheBytes - (oldEntry?.sizeBytes || 0));
+    safeRevoke(oldEntry?.objectUrl);
   }
+};
+
+const storeInCache = (key, objectUrl, sizeBytes = 0) => {
+  const existing = mediaBlobCache.get(key);
+  if (existing) {
+    totalCacheBytes = Math.max(0, totalCacheBytes - (existing.sizeBytes || 0));
+  }
+  totalCacheBytes += sizeBytes;
+  evictIfNeeded();
 
   mediaBlobCache.set(key, {
     objectUrl,
     lastUsed: Date.now(),
-    isCustomBlob: true,
+    sizeBytes,
+    activeRefs: existing ? existing.activeRefs : 0,
   });
 };
+
+export const acquireMediaUrl = (rawUrl) => {
+  const entry = mediaBlobCache.get(rawUrl);
+  if (entry) {
+    entry.activeRefs += 1;
+    entry.lastUsed = Date.now();
+  }
+};
+
+export const releaseMediaUrl = (rawUrl) => {
+  const entry = mediaBlobCache.get(rawUrl);
+  if (entry) {
+    entry.activeRefs = Math.max(0, entry.activeRefs - 1);
+    if (entry.activeRefs === 0 && pendingRevokeByUrl.has(entry.objectUrl)) {
+      pendingRevokeByUrl.delete(entry.objectUrl);
+      safeRevoke(entry.objectUrl);
+    }
+  }
+};
+
+export const getMediaCacheStats = () => ({
+  entries: mediaBlobCache.size,
+  totalBytes: totalCacheBytes,
+  maxEntries: MAX_CACHE_ENTRIES,
+  maxBytes: MAX_CACHE_BYTES,
+});
 
 /**
  * Resolves an authenticated media URL (image or audio) into a browser-loadable URL.
@@ -84,7 +132,7 @@ export const getAuthenticatedMediaUrl = async (rawUrl) => {
         }
         const blob = await mediaRes.blob();
         const objectUrl = URL.createObjectURL(blob);
-        storeInCache(rawUrl, objectUrl);
+        storeInCache(rawUrl, objectUrl, blob.size || 0);
         return objectUrl;
       }
 
@@ -115,7 +163,7 @@ export const getAuthenticatedMediaUrl = async (rawUrl) => {
 
       if (directBlob) {
         const objectUrl = URL.createObjectURL(directBlob);
-        storeInCache(rawUrl, objectUrl);
+        storeInCache(rawUrl, objectUrl, directBlob.size || 0);
         return objectUrl;
       }
 
@@ -135,7 +183,7 @@ export const getAuthenticatedMediaUrl = async (rawUrl) => {
             }
             const blob = await mediaRes.blob();
             const objectUrl = URL.createObjectURL(blob);
-            storeInCache(rawUrl, objectUrl);
+            storeInCache(rawUrl, objectUrl, blob.size || 0);
             return objectUrl;
           } catch (cdnErr) {
             // Fallback to backend authenticated proxy (?proxy=1) if direct CDN fetch fails
@@ -149,7 +197,7 @@ export const getAuthenticatedMediaUrl = async (rawUrl) => {
               ? proxyResp
               : (proxyResp?.data instanceof Blob ? proxyResp.data : new Blob([proxyResp]));
             const objectUrl = URL.createObjectURL(fallbackBlob);
-            storeInCache(rawUrl, objectUrl);
+            storeInCache(rawUrl, objectUrl, fallbackBlob.size || 0);
             return objectUrl;
           }
         } else {
@@ -166,7 +214,7 @@ export const getAuthenticatedMediaUrl = async (rawUrl) => {
             ? internalResp
             : (internalResp?.data instanceof Blob ? internalResp.data : new Blob([internalResp]));
           const objectUrl = URL.createObjectURL(internalBlob);
-          storeInCache(rawUrl, objectUrl);
+          storeInCache(rawUrl, objectUrl, internalBlob.size || 0);
           return objectUrl;
         }
       }
@@ -176,7 +224,7 @@ export const getAuthenticatedMediaUrl = async (rawUrl) => {
         const mime = rawUrl.includes('/audio/') ? 'audio/webm' : 'image/jpeg';
         const fallbackBlob = new Blob([response], { type: mime });
         const objectUrl = URL.createObjectURL(fallbackBlob);
-        storeInCache(rawUrl, objectUrl);
+        storeInCache(rawUrl, objectUrl, fallbackBlob.size || 0);
         return objectUrl;
       }
 
@@ -207,14 +255,10 @@ export const preloadMedia = (rawUrl) => {
  */
 export const clearMediaCache = () => {
   for (const entry of mediaBlobCache.values()) {
-    if (entry?.objectUrl && entry.objectUrl.startsWith('blob:')) {
-      try {
-        URL.revokeObjectURL(entry.objectUrl);
-      } catch (e) {
-        // ignore
-      }
-    }
+    safeRevoke(entry?.objectUrl);
   }
   mediaBlobCache.clear();
   inFlightRequests.clear();
+  pendingRevokeByUrl.clear();
+  totalCacheBytes = 0;
 };

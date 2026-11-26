@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback } from 'react';
 import {
   MoreVertical, Check, CheckCheck, Clock, AlertCircle, Ban, CornerUpLeft, Reply
 } from 'lucide-react';
@@ -8,9 +8,12 @@ import { ChatImageMessage } from './ChatImageMessage';
 const SWIPE_THRESHOLD = 38; // px offset to trigger reply
 const MAX_SWIPE_OFFSET = 60; // px maximum visual resistance
 
-export const SwipeableMessageItem = ({
+export const SwipeableMessageItem = React.memo(({
   message,
   isMe,
+  isFirstInGroup = true,
+  isLastInGroup = true,
+  optimizeOffscreen = true,
   isEditing,
   editingText,
   setEditingText,
@@ -28,20 +31,59 @@ export const SwipeableMessageItem = ({
   onTouchEnd,
   onContextMenu,
 }) => {
-  const [offsetX, setOffsetX] = useState(0);
-  const [isDragging, setIsDragging] = useState(false);
+  const rowRef = useRef(null);
+  const bubbleWrapRef = useRef(null);
+  const badgeRef = useRef(null);
+  const badgeIconRef = useRef(null);
 
+  const isDraggingRef = useRef(false);
+  const offsetXRef = useRef(0);
+  const rafRef = useRef(null);
   const startXRef = useRef(0);
   const startYRef = useRef(0);
   const isSwipingHorizontal = useRef(false);
   const hasDeterminedDirection = useRef(false);
   const thresholdTriggered = useRef(false);
 
+  const prefersReducedMotion =
+    typeof window !== 'undefined' &&
+    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+  const applyTransform = useCallback((x, dragging) => {
+    const progress = Math.min(x / SWIPE_THRESHOLD, 1);
+    if (bubbleWrapRef.current) {
+      bubbleWrapRef.current.style.transition = dragging || prefersReducedMotion
+        ? 'none'
+        : 'transform 0.25s cubic-bezier(0.32, 0.72, 0, 1)';
+      bubbleWrapRef.current.style.transform = `translate3d(${x}px, 0, 0)`;
+    }
+    if (badgeRef.current) {
+      badgeRef.current.style.transition = dragging || prefersReducedMotion
+        ? 'none'
+        : 'transform 0.2s cubic-bezier(0.2, 0, 0, 1), opacity 0.2s ease';
+      badgeRef.current.style.opacity = String(progress);
+      badgeRef.current.style.transform = `translate3d(${Math.max(0, x - 42)}px, -50%, 0) scale(${0.7 + progress * 0.35})`;
+    }
+    if (badgeIconRef.current) {
+      if (progress >= 1) {
+        badgeIconRef.current.classList.add('scale-110', 'text-white');
+      } else {
+        badgeIconRef.current.classList.remove('scale-110', 'text-white');
+      }
+    }
+  }, [prefersReducedMotion]);
+
+  useEffect(() => {
+    return () => {
+      if (rafRef.current) {
+        cancelAnimationFrame(rafRef.current);
+      }
+    };
+  }, []);
+
   // Gesture Handlers
   const handlePointerDown = (e) => {
-    // Only handle primary pointer (left click or touch)
     if (e.button !== undefined && e.button !== 0) return;
-    // Don't drag while editing or if clicking inside button or input
     if (isEditing || e.target.closest('button, input, textarea, a')) return;
 
     startXRef.current = e.clientX;
@@ -49,27 +91,27 @@ export const SwipeableMessageItem = ({
     isSwipingHorizontal.current = false;
     hasDeterminedDirection.current = false;
     thresholdTriggered.current = false;
-    setIsDragging(true);
+    isDraggingRef.current = true;
   };
 
   const handlePointerMove = (e) => {
-    if (!isDragging) return;
+    if (!isDraggingRef.current) return;
 
     const dx = e.clientX - startXRef.current;
     const dy = e.clientY - startYRef.current;
 
-    // Determine swipe direction after small initial movement threshold (8px)
+    // Determine swipe direction after small initial movement threshold (10px prevents accidental trigger)
     if (!hasDeterminedDirection.current) {
-      if (Math.hypot(dx, dy) > 8) {
+      if (Math.hypot(dx, dy) > 10) {
         hasDeterminedDirection.current = true;
-        // Swipe right only (dx > 0) with dominant horizontal movement
-        if (dx > 0 && Math.abs(dx) > Math.abs(dy)) {
+        if (dx > 0 && Math.abs(dx) > Math.abs(dy) * 1.2) {
           isSwipingHorizontal.current = true;
+          if (rowRef.current) rowRef.current.classList.add('select-none');
         } else {
-          // Vertical scroll detected: release horizontal capture
           isSwipingHorizontal.current = false;
-          setIsDragging(false);
-          setOffsetX(0);
+          isDraggingRef.current = false;
+          offsetXRef.current = 0;
+          applyTransform(0, false);
           return;
         }
       } else {
@@ -78,9 +120,15 @@ export const SwipeableMessageItem = ({
     }
 
     if (isSwipingHorizontal.current) {
-      // Damped displacement
       const clampedOffset = Math.min(Math.max(0, dx * 0.45), MAX_SWIPE_OFFSET);
-      setOffsetX(clampedOffset);
+      offsetXRef.current = clampedOffset;
+
+      if (!rafRef.current) {
+        rafRef.current = requestAnimationFrame(() => {
+          rafRef.current = null;
+          applyTransform(offsetXRef.current, true);
+        });
+      }
 
       if (clampedOffset >= SWIPE_THRESHOLD && !thresholdTriggered.current) {
         thresholdTriggered.current = true;
@@ -96,8 +144,16 @@ export const SwipeableMessageItem = ({
   };
 
   const handlePointerEnd = () => {
-    if (!isDragging) return;
-    setIsDragging(false);
+    if (!isDraggingRef.current) return;
+    isDraggingRef.current = false;
+
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (rowRef.current) {
+      rowRef.current.classList.remove('select-none');
+    }
 
     if (isSwipingHorizontal.current && thresholdTriggered.current) {
       if (onReply) {
@@ -105,19 +161,26 @@ export const SwipeableMessageItem = ({
       }
     }
 
-    // Reset with smooth CSS transition
-    setOffsetX(0);
+    offsetXRef.current = 0;
+    applyTransform(0, false);
     isSwipingHorizontal.current = false;
     hasDeterminedDirection.current = false;
     thresholdTriggered.current = false;
   };
 
-  const progress = Math.min(offsetX / SWIPE_THRESHOLD, 1);
+  // Soft 22px rounded bubbles; refined corner tail on final message in same-sender group
+  const bubbleShapeClass = isLastInGroup
+    ? isMe
+      ? 'rounded-[22px] rounded-br-[6px]'
+      : 'rounded-[22px] rounded-bl-[6px]'
+    : 'rounded-[22px]';
+  const showFooter = isLastInGroup || message.status === 'failed';
 
   return (
     <div
+      ref={rowRef}
       id={`msg-${message.id}`}
-      className={`flex flex-col group relative ${isMe ? 'items-end' : 'items-start'} ${isDragging && isSwipingHorizontal.current ? 'select-none' : 'select-text'}`}
+      className={`${optimizeOffscreen ? 'message-row-opt ' : ''}flex flex-col group relative select-text ${isFirstInGroup ? 'mt-3' : 'mt-1'} ${isMe ? 'items-end' : 'items-start'}`}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerEnd}
@@ -130,46 +193,48 @@ export const SwipeableMessageItem = ({
     >
       {/* Swipe to Reply Indicator Badge (Sliding in from Left) */}
       <div
+        ref={badgeRef}
         style={{
-          opacity: progress,
-          transform: `translateX(${Math.max(0, offsetX - 42)}px) scale(${0.7 + progress * 0.35})`,
-          transition: isDragging ? 'none' : 'transform 0.2s cubic-bezier(0.2, 0, 0, 1), opacity 0.2s ease',
+          opacity: 0,
+          transform: 'translate3d(0px, -50%, 0) scale(0.7)',
+          willChange: 'transform, opacity',
         }}
-        className="absolute left-0 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-pink-500/20 border border-pink-500/50 text-pink-400 flex items-center justify-center pointer-events-none z-10 shadow-lg shadow-pink-500/20"
+        className="absolute left-0 top-1/2 w-8 h-8 rounded-full bg-white/95 dark:bg-[#1E293B] border border-[#9880D9]/40 text-[#7960BC] dark:text-[#F472B6] flex items-center justify-center pointer-events-none z-10 shadow-md"
       >
-        <Reply className={`w-4 h-4 transition-transform duration-150 ${progress >= 1 ? 'scale-110 text-white' : ''}`} />
+        <Reply ref={badgeIconRef} className="w-4 h-4 transition-transform duration-150" />
       </div>
 
       <div
-        className="flex items-center gap-1 max-w-[85%] sm:max-w-[75%]"
+        ref={bubbleWrapRef}
+        className="flex flex-col max-w-[82%] sm:max-w-[74%] min-w-0 px-1"
         style={{
-          transform: `translateX(${offsetX}px)`,
-          transition: isDragging ? 'none' : 'transform 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275)',
+          transform: 'translate3d(0px, 0, 0)',
+          willChange: 'transform',
         }}
       >
-        {/* Left 3-dot trigger for outgoing messages */}
-        {isMe && !message.is_deleted && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onThreeDotClick(message, e);
-            }}
-            className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800/60 transition-opacity cursor-pointer shrink-0"
-            title="Message options"
-            aria-label="Message options"
-          >
-            <MoreVertical className="w-3.5 h-3.5" />
-          </button>
-        )}
+        <div className="flex items-center gap-1 min-w-0">
+          {/* Left 3-dot trigger for outgoing messages */}
+          {isMe && !message.is_deleted && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onThreeDotClick(message, e);
+              }}
+              className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 text-[#93889D] hover:text-[#38323F] dark:text-slate-400 dark:hover:text-white rounded-lg hover:bg-black/5 dark:hover:bg-slate-800/60 transition-opacity cursor-pointer shrink-0"
+              title="Message options"
+              aria-label="Message options"
+            >
+              <MoreVertical className="w-3.5 h-3.5" />
+            </button>
+          )}
 
-        <div
-          className={`px-3.5 sm:px-4 py-2 sm:py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm break-words relative transition-all ${
-            isMe
-              ? 'bg-gradient-to-r from-pink-500 to-indigo-600 text-white rounded-br-xs shadow-pink-500/10'
-              : 'bg-slate-800 border border-slate-700/60 text-slate-100 rounded-bl-xs'
-          }`}
-        >
+          <div className="relative min-w-0 max-w-full">
+            <div
+              className={`min-w-0 max-w-full overflow-hidden px-4 py-2.5 text-[16px] leading-[22px] text-white relative transition-transform duration-150 active:scale-[0.985] ${bubbleShapeClass} ${
+                isMe ? 'liquid-glass-bubble-out' : 'liquid-glass-bubble-in'
+              }`}
+            >
           {/* Quoted Reply Preview Card (Click to Jump) */}
           {message.reply_to_details && (
             <div
@@ -177,23 +242,18 @@ export const SwipeableMessageItem = ({
                 e.stopPropagation();
                 onJumpToReply?.(message.reply_to_details.id);
               }}
-              className={`mb-2 p-2 rounded-xl text-xs cursor-pointer transition-all flex items-start gap-2.5 relative overflow-hidden select-none border ${
+              className={`mb-2 px-3 py-2 rounded-[14px] text-xs cursor-pointer transition-colors flex items-start gap-2 relative overflow-hidden select-none border ${
                 isMe
-                  ? 'bg-black/25 border-white/20 hover:bg-black/35 text-white/90'
-                  : 'bg-slate-900/60 border-slate-700/80 hover:bg-slate-900/90 text-slate-200'
+                  ? 'bg-[#120A20]/30 hover:bg-[#120A20]/45 border-white/15 text-white'
+                  : 'bg-white/[0.07] hover:bg-white/[0.12] border-white/12 text-white'
               }`}
               title="Click to jump to original message"
             >
-              <div
-                className={`absolute left-0 top-0 bottom-0 w-1 ${
-                  isMe ? 'bg-pink-300' : 'bg-gradient-to-b from-pink-500 to-indigo-500'
-                }`}
-              />
-              <div className="flex-grow pl-1 overflow-hidden min-w-0">
-                <div className="font-semibold text-[11px] truncate text-pink-300">
+              <div className="flex-grow overflow-hidden min-w-0">
+                <div className="font-semibold text-[13px] leading-tight truncate text-white">
                   {message.reply_to_details.sender_display_name || message.reply_to_details.sender_profile_id || 'User'}
                 </div>
-                <div className="text-[11px] opacity-85 truncate mt-0.5">
+                <div className="text-[13px] leading-snug truncate mt-0.5 text-white/85">
                   {message.reply_to_details.is_deleted ? (
                     <span className="italic flex items-center gap-1 opacity-70">
                       <Ban className="w-3 h-3 inline shrink-0" /> This message was deleted
@@ -212,7 +272,7 @@ export const SwipeableMessageItem = ({
                 <img
                   src={message.reply_to_details.thumbnail_url}
                   alt="Thumbnail"
-                  className="w-8 h-8 rounded-md object-cover shrink-0 border border-white/10"
+                  className="w-8 h-8 rounded-md object-cover shrink-0 border border-white/15"
                 />
               )}
             </div>
@@ -270,62 +330,66 @@ export const SwipeableMessageItem = ({
               onRetry={handleRetryImage}
             />
           ) : (
-            <p className="whitespace-pre-wrap">{message.content}</p>
+            <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.content}</p>
           )}
+            </div>
+          </div>
 
-          {/* Message Footer (Timestamp & Status Ticks) */}
+          {/* Right 3-dot trigger for incoming messages */}
+          {!isMe && !message.is_deleted && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onThreeDotClick(message, e);
+              }}
+              className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800/60 transition-opacity cursor-pointer shrink-0"
+              title="Message options"
+              aria-label="Message options"
+            >
+              <MoreVertical className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+
+        {/* Timestamp & Status Ticks outside and below the message / group */}
+        {showFooter && (
           <div
-            className={`flex items-center justify-end gap-1 text-[10px] mt-1 ${
-              isMe ? 'text-pink-100/70' : 'text-slate-400'
+            className={`flex items-center gap-1 text-[11px] leading-none tabular-nums mt-1 px-1 ${
+              isMe ? 'justify-end text-[#93889D] dark:text-[#B4A7C2]' : 'justify-start text-[#93889D] dark:text-[#94A3B8]'
             }`}
           >
             <span>{formatMessageTime(message.created_at)}</span>
             {message.is_edited && !message.is_deleted && (
-              <span className="italic text-[9px] opacity-80">(edited)</span>
+              <span className="italic text-[10px] opacity-80">(edited)</span>
             )}
             {isMe && !message.is_deleted && (
-              <span className="ml-1 inline-flex items-center">
+              <span className="ml-0.5 inline-flex items-center">
                 {message.status === 'failed' ? (
                   <button
                     type="button"
                     onClick={() => handleRetry(message)}
-                    className="inline-flex items-center gap-1 text-rose-300 hover:text-white bg-rose-500/20 hover:bg-rose-500/30 px-1.5 py-0.5 rounded text-[10px] cursor-pointer transition-colors"
+                    className="inline-flex items-center gap-1 text-rose-500 dark:text-rose-300 hover:underline px-1 py-0.5 rounded text-[11px] cursor-pointer"
                     title="Sending failed. Click to retry."
                     aria-label="Retry sending message"
                   >
-                    <AlertCircle className="w-3 h-3 text-rose-400" />
-                    <span className="font-semibold underline">Retry</span>
+                    <AlertCircle className="w-3 h-3" />
+                    <span className="font-semibold">Retry</span>
                   </button>
                 ) : message.status === 'sending' ? (
-                  <Clock className="w-3 h-3 animate-spin text-pink-200/50" title="Sending..." />
+                  <Clock className="w-3 h-3 animate-spin opacity-60" title="Sending..." />
                 ) : message.status === 'seen' ? (
-                  <CheckCheck className="w-3.5 h-3.5 text-pink-200 font-bold" title="Seen" />
+                  <CheckCheck className="w-3.5 h-3.5 text-[#9880D9] dark:text-sky-300" title="Seen" />
                 ) : message.status === 'delivered' ? (
-                  <CheckCheck className="w-3.5 h-3.5 text-slate-400/80" title="Delivered" />
+                  <CheckCheck className="w-3.5 h-3.5 opacity-75" title="Delivered" />
                 ) : (
-                  <Check className="w-3.5 h-3.5 text-pink-200/60" title="Sent" />
+                  <Check className="w-3.5 h-3.5 opacity-65" title="Sent" />
                 )}
               </span>
             )}
           </div>
-        </div>
-
-        {/* Right 3-dot trigger for incoming messages */}
-        {!isMe && !message.is_deleted && (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onThreeDotClick(message, e);
-            }}
-            className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800/60 transition-opacity cursor-pointer shrink-0"
-            title="Message options"
-            aria-label="Message options"
-          >
-            <MoreVertical className="w-3.5 h-3.5" />
-          </button>
         )}
       </div>
     </div>
   );
-};
+});

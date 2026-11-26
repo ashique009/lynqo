@@ -12,7 +12,7 @@ export default defineConfig({
         
       srcDir: 'src',                 
       filename: 'sw.js',              
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
       includeAssets: ['favicon.ico'],
 
       injectManifest: {               

@@ -113,10 +113,10 @@ export const Settings = () => {
   };
 
   return (
-    <div className="space-y-8 max-w-3xl mx-auto pb-12">
+    <div className="space-y-6 max-w-3xl mx-auto pb-12">
       <div>
-        <h1 className="text-2xl font-bold text-white">Profile Settings</h1>
-        <p className="text-sm text-slate-400">Manage your profile details and security recovery code</p>
+        <h1 className="text-xl sm:text-2xl font-bold text-[#F1F5F9]">Profile Settings</h1>
+        <p className="text-sm text-[#94A3B8]">Manage your profile details and security recovery code</p>
       </div>
 
       {/* Edit Profile Card */}
