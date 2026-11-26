@@ -46,15 +46,20 @@ export const HomeDashboard = () => {
           cacheSet('dashboard_conversations', merged, 120);
           return merged;
         });
-        // Background prefetch messages for the most recent conversation for instant tap-to-open
+        // Background prefetch messages for the most recent conversation during idle time
         if (convList.length > 0) {
           const topConvId = convList[0].id;
           if (!cacheGet(`conv_msgs_${topConvId}`)) {
-            chatService.getMessages(topConvId, { limit: 50, mark_read: false }).then((msgRes) => {
-              if (msgRes.success) {
-                cacheSet(`conv_msgs_${topConvId}`, msgRes.messages || [], 60);
-              }
-            }).catch(() => {});
+            const schedulePrefetch = typeof window !== 'undefined' && 'requestIdleCallback' in window
+              ? (fn) => window.requestIdleCallback(fn, { timeout: 1200 })
+              : (fn) => setTimeout(fn, 350);
+            schedulePrefetch(() => {
+              chatService.getMessages(topConvId, { limit: 50, mark_read: false }).then((msgRes) => {
+                if (msgRes.success) {
+                  cacheSet(`conv_msgs_${topConvId}`, msgRes.messages || [], 60);
+                }
+              }).catch(() => {});
+            });
           }
         }
       }

@@ -83,7 +83,12 @@ export const Chat = () => {
   loadingOlderRef.current = loadingOlder;
 
   const scrollToBottom = useCallback((behavior = 'auto') => {
-    messagesEndRef.current?.scrollIntoView({ behavior });
+    const container = chatContainerRef.current;
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior });
+    } else {
+      messagesEndRef.current?.scrollIntoView({ behavior });
+    }
     setShowScrollBottom(false);
     setNewMessagesCount(0);
   }, []);
