@@ -92,6 +92,20 @@ export const MessageComposer = React.memo(({
     maxDuration: 120,
   });
 
+  // Notify PWA updater when voice recording is active so reloads never interrupt recording
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (isRecording) {
+      window.__lynqoBusyCount = (window.__lynqoBusyCount || 0) + 1;
+      return () => {
+        window.__lynqoBusyCount = Math.max(0, (window.__lynqoBusyCount || 1) - 1);
+        if (window.__lynqoBusyCount === 0) {
+          window.dispatchEvent(new CustomEvent('lynqo:idle'));
+        }
+      };
+    }
+  }, [isRecording]);
+
   const handleInputChange = (e) => {
     const el = e.target;
     setInputText(el.value);
