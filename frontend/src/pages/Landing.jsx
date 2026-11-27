@@ -87,7 +87,7 @@ export const Landing = () => {
   };
 
   return (
-    <div className="relative min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between overflow-x-hidden selection:bg-pink-500 selection:text-white">
+    <div className="relative min-h-dvh bg-slate-950 text-slate-100 flex flex-col justify-between overflow-x-hidden selection:bg-pink-500 selection:text-white">
       {/* Background ambient glows */}
       <div className="absolute top-[-20%] left-[-20%] w-[60vw] h-[60vw] rounded-full bg-pink-600/10 blur-[150px] pointer-events-none" />
       <div className="absolute bottom-[-20%] right-[-20%] w-[60vw] h-[60vw] rounded-full bg-indigo-600/10 blur-[150px] pointer-events-none" />

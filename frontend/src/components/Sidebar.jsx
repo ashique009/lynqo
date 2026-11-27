@@ -23,7 +23,7 @@ export const Sidebar = () => {
   ];
 
   return (
-    <aside className="w-64 border-r border-slate-800/80 bg-slate-950/60 backdrop-blur-md hidden md:flex flex-col justify-between p-4 shrink-0 h-[calc(100vh-4.5rem)] sticky top-[4.5rem]">
+    <aside className="w-64 border-r border-slate-800/80 bg-slate-950/60 backdrop-blur-md hidden md:flex flex-col justify-between p-4 shrink-0 h-[calc(100dvh-4.5rem)] sticky top-[4.5rem]">
       <div className="space-y-1.5">
         <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-3 mb-2 block">
           Menu
@@ -37,7 +37,7 @@ export const Sidebar = () => {
               className={({ isActive }) =>
                 `flex items-center gap-3 px-3.5 py-3 rounded-2xl font-semibold text-xs transition-all ${
                   isActive
-                    ? 'bg-pink-500 text-white shadow-lg shadow-pink-500/20'
+                    ? 'bg-gradient-to-r from-[#8B68F6] to-[#EC6EB8] text-white shadow-lg shadow-[#8B68F6]/25'
                     : 'text-slate-400 hover:text-white hover:bg-slate-900'
                 }`
               }

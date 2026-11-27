@@ -36,7 +36,7 @@ export const MainLayout = () => {
         <main className={`flex-grow ${
           isChatRoute
             ? 'p-0 md:p-8 overflow-hidden h-full flex flex-col'
-            : 'px-4 pt-2 pb-32 md:p-8 overflow-y-auto'
+            : 'px-4 pt-2 pb-tab-bar md:p-8 overflow-y-auto'
         }`}>
           <div className={isChatRoute ? 'w-full h-full' : 'max-w-6xl mx-auto w-full'}>
             <Outlet />

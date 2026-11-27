@@ -138,7 +138,7 @@ export const ChatImageMessage = React.memo(({
         {/* Hover Zoom Hint */}
         {isLoaded && !isSending && !isFailed && !loadError && (
           <div className="absolute inset-0 bg-black/30 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
-            <div className="p-2 rounded-full bg-black/60 text-white backdrop-blur-sm shadow-md">
+            <div className="p-2 rounded-full bg-black/75 text-white shadow-md">
               <ZoomIn className="w-4 h-4" />
             </div>
           </div>
@@ -146,7 +146,7 @@ export const ChatImageMessage = React.memo(({
 
         {/* Sending Overlay */}
         {isSending && (
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-xs flex flex-col items-center justify-center gap-1.5 text-white z-10">
+          <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center gap-1.5 text-white z-10">
             <Loader2 className="w-6 h-6 animate-spin text-pink-400" />
             <span className="text-[11px] font-medium tracking-wide">Sending photo...</span>
           </div>
@@ -154,7 +154,7 @@ export const ChatImageMessage = React.memo(({
 
         {/* Failed Overlay with Retry */}
         {isFailed && (
-          <div className="absolute inset-0 bg-black/75 backdrop-blur-xs flex flex-col items-center justify-center gap-2 text-white z-10 p-2">
+          <div className="absolute inset-0 bg-black/85 flex flex-col items-center justify-center gap-2 text-white z-10 p-2">
             <span className="text-xs text-rose-300 font-semibold">Upload Failed</span>
             {onRetry && (
               <button

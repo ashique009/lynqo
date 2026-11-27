@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 
 export const NotFound = () => {
   return (
-    <div className="min-h-[calc(100vh-130px)] flex flex-col items-center justify-center text-center p-4">
+    <div className="min-h-[calc(100dvh-130px)] flex flex-col items-center justify-center text-center p-4">
       {/* GLOW */}
       <div className="absolute w-60 h-60 rounded-full bg-brand-purple/10 blur-[60px] pointer-events-none" />
 

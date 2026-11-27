@@ -9,6 +9,7 @@ import { cacheGet, cacheSet } from '../utils/cache';
 import { mergeMessages } from '../utils/messageUtils';
 import { audioPlayerManager } from '../utils/audioPlayerManager';
 import { compressImageFile } from '../utils/imageUtils';
+import { markBusy } from '../utils/busyTracker';
 import ImageViewerModal from '../components/ImageViewerModal';
 import Modal from '../components/Modal';
 import { ChatHeader } from '../components/chat/ChatHeader';
@@ -66,8 +67,10 @@ export const Chat = () => {
   const [isDeleting, setIsDeleting] = useState(false);
   const [replyingTo, setReplyingTo] = useState(null);
   const [viewerMessage, setViewerMessage] = useState(null);
+  const [composerHeight, setComposerHeight] = useState(88);
 
   const messageInputRef = useRef(null);
+  const composerContainerRef = useRef(null);
   const longPressTimerRef = useRef(null);
   const touchStartPosRef = useRef({ x: 0, y: 0 });
   const messagesEndRef = useRef(null);
@@ -75,7 +78,38 @@ export const Chat = () => {
   const otherTypingTimeoutRef = useRef(null);
   const isNearBottomRef = useRef(true);
   const pendingImageFilesRef = useRef(new Map());
+  const pendingAckCleanersRef = useRef(new Map());
   const pendingInitialScrollRef = useRef(null);
+
+  // Measure dynamic composer height (multi-line typing, reply preview, voice recorder)
+  useEffect(() => {
+    const el = composerContainerRef.current;
+    if (!el) return;
+
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const h = Math.round(entry.borderBoxSize?.[0]?.blockSize || el.offsetHeight);
+        if (h > 0) {
+          setComposerHeight(h);
+        }
+      }
+    });
+
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // When composer height changes, keep messages anchored cleanly at bottom
+  useEffect(() => {
+    if (isNearBottomRef.current) {
+      requestAnimationFrame(() => {
+        const container = chatContainerRef.current;
+        if (container) {
+          container.scrollTop = container.scrollHeight;
+        }
+      });
+    }
+  }, [composerHeight]);
 
   // Refs for stable callbacks (prevents MessageList / SwipeableMessageItem re-renders)
   const activeConvIdRef = useRef(conversationId);
@@ -146,6 +180,12 @@ export const Chat = () => {
       setShowScrollBottom(false);
       setNewMessagesCount(0);
     }
+
+    requestAnimationFrame(() => {
+      if (isNearBottomRef.current && chatContainerRef.current) {
+        chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+      }
+    });
 
     container.style.opacity = '1';
     setIsPositionReady(true);
@@ -443,6 +483,13 @@ export const Chat = () => {
     });
 
     const unsubAck = wsService.on('message_ack', (data) => {
+      if (data?.client_message_id) {
+        const cleaner = pendingAckCleanersRef.current.get(data.client_message_id);
+        if (cleaner) {
+          cleaner();
+          pendingAckCleanersRef.current.delete(data.client_message_id);
+        }
+      }
       setMessages((prev) => {
         let changed = false;
         const updated = prev.map((m) => {
@@ -625,7 +672,7 @@ export const Chat = () => {
     const touch = e.touches[0];
     const dx = Math.abs(touch.clientX - touchStartPosRef.current.x);
     const dy = Math.abs(touch.clientY - touchStartPosRef.current.y);
-    if (dx > 10 || dy > 10) {
+    if (dx > 18 || dy > 18) {
       clearTimeout(longPressTimerRef.current);
       longPressTimerRef.current = null;
     }
@@ -939,10 +986,14 @@ export const Chat = () => {
       return updated;
     });
     setReplyingTo(null);
-    setTimeout(() => scrollToBottom('smooth'), 40);
+    requestAnimationFrame(() => {
+      scrollToBottom('smooth');
+      setTimeout(() => scrollToBottom('smooth'), 50);
+    });
 
     const sentWs = wsService.sendMessage(currentId, text, clientMsgId, replyToId);
     if (!sentWs) {
+      const clearBusy = markBusy();
       try {
         const res = await chatService.sendMessage(currentId, text, clientMsgId, replyToId);
         if (res.success && activeConvIdRef.current === currentId) {
@@ -961,9 +1012,18 @@ export const Chat = () => {
           return updated;
         });
         showToast(err.message || 'Failed to send message. Tap Retry.', 'error');
+      } finally {
+        clearBusy();
       }
     } else {
+      const clearBusy = markBusy();
+      pendingAckCleanersRef.current.set(clientMsgId, clearBusy);
       setTimeout(() => {
+        const cleaner = pendingAckCleanersRef.current.get(clientMsgId);
+        if (cleaner) {
+          cleaner();
+          pendingAckCleanersRef.current.delete(clientMsgId);
+        }
         setMessages((prev) => {
           const target = prev.find((m) => m.client_message_id === clientMsgId);
           if (target && target.status === 'sending') {
@@ -1077,8 +1137,12 @@ export const Chat = () => {
       return updated;
     });
     setReplyingTo(null);
-    setTimeout(() => scrollToBottom('smooth'), 50);
+    requestAnimationFrame(() => {
+      scrollToBottom('smooth');
+      setTimeout(() => scrollToBottom('smooth'), 50);
+    });
 
+    const clearBusy = markBusy();
     try {
       const res = await chatService.sendVoiceMessage(currentId, audioBlob, durationSec, clientMsgId, replyToId);
       if (res.success && activeConvIdRef.current === currentId) {
@@ -1100,6 +1164,8 @@ export const Chat = () => {
         return updated;
       });
       showToast(err.message || 'Failed to upload voice message. Tap Retry.', 'error');
+    } finally {
+      clearBusy();
     }
   }, [scrollToBottom, showToast]);
 
@@ -1146,8 +1212,12 @@ export const Chat = () => {
       return updated;
     });
     setReplyingTo(null);
-    setTimeout(() => scrollToBottom('smooth'), 50);
+    requestAnimationFrame(() => {
+      scrollToBottom('smooth');
+      setTimeout(() => scrollToBottom('smooth'), 50);
+    });
 
+    const clearBusy = markBusy();
     try {
       const res = await chatService.sendImageMessage(currentId, uploadFile, clientMsgId, null, replyToId);
       if (res.success && activeConvIdRef.current === currentId) {
@@ -1170,6 +1240,8 @@ export const Chat = () => {
         return updated;
       });
       showToast(err.message || 'Failed to upload photo. Tap to retry.', 'error');
+    } finally {
+      clearBusy();
     }
   }, [scrollToBottom, showToast]);
 
@@ -1194,7 +1266,7 @@ export const Chat = () => {
   const otherUser = conversation?.other_participant;
 
   return (
-    <div className="flex flex-col h-full md:h-[calc(100vh-8rem)] w-full max-w-4xl mx-auto md:rounded-3xl chat-liquid-bg md:border md:border-black/[0.06] dark:md:border-white/[0.1] shadow-xl overflow-hidden relative">
+    <div className="flex flex-col h-full md:h-[calc(100dvh-8rem)] w-full max-w-4xl mx-auto md:rounded-3xl chat-liquid-bg md:border md:border-black/[0.06] dark:md:border-white/[0.1] shadow-xl overflow-hidden relative">
       <ChatHeader
         otherUser={otherUser}
         otherUserTyping={otherUserTyping}
@@ -1205,6 +1277,7 @@ export const Chat = () => {
       <MessageList
         chatContainerRef={chatContainerRef}
         messagesEndRef={messagesEndRef}
+        composerHeight={composerHeight}
         onScroll={handleScroll}
         loadingOlder={loadingOlder}
         isLoading={isLoading}
@@ -1236,6 +1309,7 @@ export const Chat = () => {
         visible={showScrollBottom}
         unreadCount={newMessagesCount}
         onClick={handleScrollBottomClick}
+        bottomOffset={composerHeight + 12}
       />
 
       <MessageComposer
@@ -1248,6 +1322,7 @@ export const Chat = () => {
         onSendVoice={handleSendVoiceMessage}
         onError={handleComposerError}
         messageInputRef={messageInputRef}
+        composerRef={composerContainerRef}
       />
 
       {/* Floating Liquid Glass Context Menu */}

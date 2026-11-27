@@ -83,7 +83,7 @@ export const BottomNavigation = () => {
       if (!pill) return;
 
       if (animateTransition && !prefersReducedMotion()) {
-        pill.style.transition = 'transform 0.34s cubic-bezier(0.22, 1.12, 0.36, 1)';
+        pill.style.transition = 'transform 0.3s cubic-bezier(0.25, 1, 0.5, 1)';
       } else {
         pill.style.transition = 'none';
       }
@@ -95,7 +95,7 @@ export const BottomNavigation = () => {
       }
 
       const scale = lifted ? LIFT_SCALE : 1;
-      pill.style.transform = `translate3d(${xPx}px, 0, 0) scale3d(${scale}, ${scale}, 1)`;
+      pill.style.transform = `translateX(${xPx}px) scale3d(${scale}, ${scale}, 1)`;
     },
     [prefersReducedMotion]
   );
@@ -106,9 +106,9 @@ export const BottomNavigation = () => {
       if (!pill) return;
       pill.style.transition = prefersReducedMotion()
         ? 'none'
-        : 'transform 0.34s cubic-bezier(0.22, 1.12, 0.36, 1)';
+        : 'transform 0.3s cubic-bezier(0.25, 1, 0.5, 1)';
       pill.classList.remove('liquid-glass-indicator-lifted');
-      pill.style.transform = `translate3d(${tabIdx * 100}%, 0, 0) scale3d(1, 1, 1)`;
+      pill.style.transform = `translateX(${tabIdx * 100}%) scale3d(1, 1, 1)`;
     },
     [prefersReducedMotion]
   );
@@ -213,12 +213,7 @@ export const BottomNavigation = () => {
 
     const maxX = (NAV_ITEMS.length - 1) * g.tabWidth;
     const rawX = g.baseX + dx;
-    let clampedX = rawX;
-    if (rawX < 0) {
-      clampedX = rawX * 0.22;
-    } else if (rawX > maxX) {
-      clampedX = maxX + (rawX - maxX) * 0.22;
-    }
+    const clampedX = Math.max(0, Math.min(maxX, rawX));
 
     const nearestIdx = Math.max(
       0,
@@ -299,7 +294,7 @@ export const BottomNavigation = () => {
         onPointerUp={() => finishGesture(false)}
         onPointerCancel={() => finishGesture(true)}
         style={{ touchAction: 'pan-y' }}
-        className="liquid-glass-nav rounded-[30px] p-1.5 relative grid grid-cols-4 items-center select-none"
+        className="liquid-glass-nav rounded-[30px] p-1.5 relative grid grid-cols-4 items-center select-none overflow-hidden"
       >
         {/* Interactive Liquid Glass active-tab indicator */}
         <div
@@ -307,9 +302,9 @@ export const BottomNavigation = () => {
           aria-hidden="true"
           style={{
             width: 'calc((100% - 12px) / 4)',
-            transform: `translate3d(${activeIdx * 100}%, 0, 0) scale3d(1, 1, 1)`,
+            transform: `translateX(${activeIdx * 100}%) scale3d(1, 1, 1)`,
           }}
-          className="liquid-glass-indicator absolute top-1.5 bottom-1.5 left-1.5 rounded-[24px] motion-reduce:transition-none pointer-events-none"
+          className="liquid-glass-indicator absolute top-1.5 bottom-1.5 left-1.5 rounded-[24px] motion-reduce:transition-none pointer-events-none will-change-transform"
         />
 
         {NAV_ITEMS.map((item, idx) => {

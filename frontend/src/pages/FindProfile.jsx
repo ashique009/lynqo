@@ -145,7 +145,7 @@ export const FindProfile = () => {
   };
 
   return (
-    <div className="space-y-6 sm:space-y-8 max-w-3xl mx-auto pb-10">
+    <div className="space-y-6 sm:space-y-8 max-w-3xl mx-auto pb-8">
       {/* Top Banner: Your Profile ID & Direct Link */}
       <div className="p-5 sm:p-6 md:p-8 rounded-3xl bg-slate-900/80 border border-slate-800 shadow-xl backdrop-blur-xl space-y-5 sm:space-y-6">
         <div className="flex items-center gap-3">
@@ -163,7 +163,7 @@ export const FindProfile = () => {
           <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-between gap-2">
             <div className="truncate">
               <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Your Profile ID</span>
-              <span className="font-mono text-sm sm:text-base font-bold text-pink-400 tracking-wider">
+              <span className="font-mono text-sm sm:text-base font-bold accent-gradient-text tracking-wider">
                 {profile?.profile_id || '...'}
               </span>
             </div>
@@ -214,6 +214,7 @@ export const FindProfile = () => {
             <input
               type="text"
               placeholder="Name or ID (e.g. Alice or LYNQ-XXXXX)"
+              aria-label="Search by name or profile ID"
               value={searchQuery}
               onChange={handleInputChange}
               className="w-full pl-10 sm:pl-12 pr-4 py-3 sm:py-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-white placeholder-slate-600 focus:outline-none focus:border-pink-500 focus:ring-1 focus:ring-pink-500 transition-all text-xs sm:text-sm tracking-wide"
@@ -264,6 +265,8 @@ export const FindProfile = () => {
                       <img
                         src={getOptimizedImageUrl(target.profile_picture, { width: 112, height: 112 })}
                         alt={target.display_name}
+                        width="56"
+                        height="56"
                         className="w-full h-full object-cover"
                         loading="lazy"
                         decoding="async"
@@ -281,7 +284,7 @@ export const FindProfile = () => {
                   <div>
                     <h4 className="font-bold text-sm sm:text-base text-white">{target.display_name}</h4>
                     <div className="flex items-center gap-2 mt-0.5">
-                      <span className="font-mono text-xs text-pink-400 font-semibold">{target.profile_id}</span>
+                      <span className="font-mono text-xs accent-gradient-text font-semibold">{target.profile_id}</span>
                       <span className="text-xs text-slate-500">•</span>
                       <span className="text-xs text-slate-400">
                         {target.is_online ? (

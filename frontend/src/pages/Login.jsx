@@ -156,8 +156,8 @@ export const Login = () => {
                 <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
                   Your Recovery Code
                 </span>
-                <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-900/90 border border-slate-700/60 font-mono text-sm sm:text-base font-bold text-pink-400">
-                  <span className="truncate">{createdData.recoveryCode}</span>
+                <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-900/90 border border-slate-700/60 font-mono text-sm sm:text-base font-bold">
+                  <span className="truncate accent-gradient-text">{createdData.recoveryCode}</span>
                   <button
                     type="button"
                     onClick={() => copyToClipboard(createdData.recoveryCode)}

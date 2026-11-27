@@ -52,6 +52,8 @@ export const ChatHeader = React.memo(({ otherUser, otherUserTyping, isWsConnecte
               <img
                 src={getOptimizedImageUrl(otherUser.profile_picture, { width: 88, height: 88 })}
                 alt=""
+                width="44"
+                height="44"
                 className="w-full h-full object-cover"
                 loading="lazy"
                 decoding="async"

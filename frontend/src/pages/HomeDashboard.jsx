@@ -164,7 +164,7 @@ export const HomeDashboard = () => {
   };
 
   return (
-    <div className="space-y-6 max-w-3xl mx-auto">
+    <div className="space-y-6 max-w-3xl mx-auto pb-8">
       {/* Liquid Glass Profile Card */}
       <div className="liquid-glass-card rounded-[26px] p-5 flex flex-col gap-4">
         <div className="flex items-center gap-4">
@@ -174,6 +174,8 @@ export const HomeDashboard = () => {
                 <img
                   src={getOptimizedImageUrl(profile.profile_picture, { width: 128, height: 128 })}
                   alt=""
+                  width="64"
+                  height="64"
                   className="w-full h-full object-cover"
                   loading="lazy"
                   decoding="async"
@@ -253,6 +255,7 @@ export const HomeDashboard = () => {
           <input
             type="text"
             placeholder="Search chats"
+            aria-label="Search chats"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="liquid-glass-pill w-full pl-11 pr-4 py-3 min-h-[48px] rounded-[22px] text-white placeholder-[#9E90B0] text-[16px] focus:outline-none focus:border-white/40 transition-colors"
@@ -318,6 +321,8 @@ export const HomeDashboard = () => {
                         <img
                           src={getOptimizedImageUrl(conv.other_participant.profile_picture, { width: 96, height: 96 })}
                           alt=""
+                          width="48"
+                          height="48"
                           className="w-full h-full object-cover"
                           loading="lazy"
                           decoding="async"

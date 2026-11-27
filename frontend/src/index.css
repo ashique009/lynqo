@@ -205,6 +205,16 @@ html.dark * {
   padding-right: max(0.5rem, env(safe-area-inset-right, 0px));
 }
 
+/* Floating Bottom Tab Bar scroll clearance for pages */
+.pb-tab-bar {
+  padding-bottom: calc(80px + 12px + 24px + env(safe-area-inset-bottom, 0px));
+}
+@media (min-width: 768px) {
+  .pb-tab-bar {
+    padding-bottom: 2rem;
+  }
+}
+
 /* Reply Highlight Flash Animation */
 @keyframes replyHighlightPulse {
   0% {
@@ -327,11 +337,17 @@ html.dark .liquid-glass-sheet {
 }
 
 .liquid-glass-card {
-  background: linear-gradient(180deg, rgba(44, 33, 66, 0.52) 0%, rgba(26, 18, 42, 0.62) 100%);
+  background: linear-gradient(180deg, rgba(44, 33, 66, 0.78) 0%, rgba(26, 18, 42, 0.88) 100%);
   border: 1px solid rgba(255, 255, 255, 0.16);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2), 0 10px 30px rgba(0, 0, 0, 0.35);
-  -webkit-backdrop-filter: blur(14px) saturate(150%);
-  backdrop-filter: blur(14px) saturate(150%);
+}
+
+.accent-gradient-text {
+  background: linear-gradient(135deg, #A78BFA 0%, #EC6EB8 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  display: inline-block;
 }
 
 .liquid-glass-nav {
@@ -341,7 +357,6 @@ html.dark .liquid-glass-sheet {
   -webkit-backdrop-filter: blur(18px) saturate(160%);
   backdrop-filter: blur(18px) saturate(160%);
   transition: transform 0.28s cubic-bezier(0.32, 0.72, 0, 1);
-  will-change: transform;
 }
 
 .liquid-glass-indicator {
@@ -441,6 +456,14 @@ html.dark .chat-liquid-bg {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
   .lynqo-toast-enter,
   .lynqo-modal-backdrop,
   .lynqo-modal-enter,

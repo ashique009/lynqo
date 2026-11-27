@@ -25,6 +25,7 @@ export const MessageComposer = React.memo(({
   onSendVoice,
   onError,
   messageInputRef,
+  composerRef,
 }) => {
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
@@ -164,7 +165,7 @@ export const MessageComposer = React.memo(({
   return (
     <>
       {/* Floating Apple-inspired Liquid Glass Composer */}
-      <div className="absolute bottom-0 left-0 right-0 z-20 px-2.5 sm:px-4 pt-2 pb-safe pointer-events-none">
+      <div ref={composerRef} className="absolute bottom-0 left-0 right-0 z-20 px-2.5 sm:px-4 pt-2 pb-safe pointer-events-none">
         <div className="pointer-events-auto">
           <ReplyPreview
             replyingTo={replyingTo}
@@ -355,6 +356,7 @@ export const MessageComposer = React.memo(({
                   ref={messageInputRef}
                   rows={1}
                   placeholder="Message"
+                  aria-label="Message input"
                   value={inputText}
                   onChange={handleInputChange}
                   onKeyDown={handleKeyDown}

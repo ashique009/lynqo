@@ -31,7 +31,7 @@ const ContactUs = lazy(() => import("./pages/ContactUs"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 
 const PageFallback = () => (
-  <div className="min-h-[60vh] flex items-center justify-center">
+  <div className="min-h-[60dvh] flex items-center justify-center">
     <Loader />
   </div>
 );

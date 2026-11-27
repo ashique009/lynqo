@@ -54,7 +54,7 @@ export const ProfileSetup = () => {
   };
 
   return (
-    <div className="relative min-h-[calc(100vh-130px)] flex items-center justify-center py-6">
+    <div className="relative min-h-[calc(100dvh-130px)] flex items-center justify-center py-6">
       <div className="w-full max-w-2xl glass-panel p-6 md:p-10 rounded-3xl shadow-2xl bg-white dark:bg-brand-dark/40 border border-[#F4C0D1] dark:border-brand-purple/20 transition-colors duration-200">
         <h2 className="text-3xl font-bold font-display text-[#2C2C2A] dark:text-slate-100 mb-2">
           Setup Your Profile

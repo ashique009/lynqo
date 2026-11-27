@@ -35,6 +35,7 @@ export const Modal = ({ isOpen, onClose, title, children }) => {
           </h3>
           <button
             onClick={onClose}
+            aria-label="Close modal"
             className="p-1 rounded-lg text-[#5F5E5A] dark:text-slate-400 hover:text-[#2C2C2A] dark:hover:text-slate-200 hover:bg-[#F4C0D1]/30 dark:hover:bg-slate-800/40 transition-all cursor-pointer"
           >
             <X className="w-4 h-4" />

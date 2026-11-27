@@ -221,11 +221,11 @@ export const SwipeableMessageItem = React.memo(({
                 e.stopPropagation();
                 onThreeDotClick(message, e);
               }}
-              className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 text-[#93889D] hover:text-[#38323F] dark:text-slate-400 dark:hover:text-white rounded-lg hover:bg-black/5 dark:hover:bg-slate-800/60 transition-opacity cursor-pointer shrink-0"
+              className="opacity-0 group-hover:opacity-100 focus:opacity-100 min-w-[44px] min-h-[44px] flex items-center justify-center text-[#93889D] hover:text-[#38323F] dark:text-slate-400 dark:hover:text-white rounded-xl hover:bg-black/5 dark:hover:bg-slate-800/60 transition-opacity cursor-pointer shrink-0"
               title="Message options"
               aria-label="Message options"
             >
-              <MoreVertical className="w-3.5 h-3.5" />
+              <MoreVertical className="w-4 h-4" />
             </button>
           )}
 
@@ -272,6 +272,9 @@ export const SwipeableMessageItem = React.memo(({
                 <img
                   src={message.reply_to_details.thumbnail_url}
                   alt="Thumbnail"
+                  width="32"
+                  height="32"
+                  loading="lazy"
                   className="w-8 h-8 rounded-md object-cover shrink-0 border border-white/15"
                 />
               )}
@@ -289,6 +292,7 @@ export const SwipeableMessageItem = React.memo(({
               <textarea
                 value={editingText}
                 onChange={(e) => setEditingText(e.target.value)}
+                aria-label="Edit message"
                 className="w-full p-2 text-xs sm:text-sm bg-slate-950/70 border border-pink-400/50 rounded-xl text-white resize-none focus:outline-none focus:ring-1 focus:ring-pink-400"
                 rows={2}
                 autoFocus
@@ -310,7 +314,7 @@ export const SwipeableMessageItem = React.memo(({
                 <button
                   type="button"
                   onClick={() => handleSaveEdit(message.id)}
-                  className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-pink-500 hover:bg-pink-600 text-white shadow transition-colors cursor-pointer"
+                  className="px-2.5 py-1 text-[11px] font-semibold rounded-lg bg-gradient-to-r from-[#8B68F6] to-[#EC6EB8] hover:opacity-95 text-white shadow transition-all cursor-pointer"
                 >
                   Save
                 </button>
@@ -326,7 +330,7 @@ export const SwipeableMessageItem = React.memo(({
             <ChatImageMessage
               message={message}
               isMe={isMe}
-              onImageClick={(m) => setViewerMessage(m)}
+              onImageClick={setViewerMessage}
               onRetry={handleRetryImage}
             />
           ) : (
@@ -343,11 +347,11 @@ export const SwipeableMessageItem = React.memo(({
                 e.stopPropagation();
                 onThreeDotClick(message, e);
               }}
-              className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800/60 transition-opacity cursor-pointer shrink-0"
+              className="opacity-0 group-hover:opacity-100 focus:opacity-100 min-w-[44px] min-h-[44px] flex items-center justify-center text-slate-400 hover:text-white rounded-xl hover:bg-slate-800/60 transition-opacity cursor-pointer shrink-0"
               title="Message options"
               aria-label="Message options"
             >
-              <MoreVertical className="w-3.5 h-3.5" />
+              <MoreVertical className="w-4 h-4" />
             </button>
           )}
         </div>

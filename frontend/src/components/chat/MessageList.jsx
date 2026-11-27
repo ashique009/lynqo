@@ -38,6 +38,7 @@ const ChatSkeleton = () => (
 export const MessageList = React.memo(({
   chatContainerRef,
   messagesEndRef,
+  composerHeight = 88,
   onScroll,
   loadingOlder,
   isLoading,
@@ -90,8 +91,11 @@ export const MessageList = React.memo(({
     <div
       ref={chatContainerRef}
       onScroll={onScroll}
-      style={{ opacity: isLoading || messages.length === 0 || isPositionReady ? 1 : 0 }}
-      className="flex-grow rounded-t-[24px] z-10 px-3 sm:px-4 md:px-6 pt-4 pb-28 overflow-y-auto overflow-x-hidden bg-transparent relative min-h-0 overscroll-contain"
+      style={{
+        opacity: isLoading || messages.length === 0 || isPositionReady ? 1 : 0,
+        paddingBottom: `${Math.max(composerHeight + 16, 96)}px`,
+      }}
+      className="flex-grow rounded-t-[24px] z-10 px-3 sm:px-4 md:px-6 pt-4 overflow-y-auto overflow-x-hidden bg-transparent relative min-h-0 overscroll-contain"
     >
       {loadingOlder && (
         <div className="py-2 text-center text-xs text-[#93889D] dark:text-[#94A3B8]">
@@ -147,7 +151,7 @@ export const MessageList = React.memo(({
             Math.abs(nextTs - curTs) < 120000;
 
           return (
-            <React.Fragment key={msg.client_message_id || msg.id || index}>
+            <React.Fragment key={msg.client_message_id ? `cmsg-${msg.client_message_id}` : `msg-${msg.id || index}`}>
               {showDateSeparator && (
                 <div className="flex justify-center my-3">
                   <span className="px-3.5 py-1 rounded-full bg-[#241B35]/75 border border-white/10 text-[12px] font-medium text-[#C4B8D4] shadow-xs">

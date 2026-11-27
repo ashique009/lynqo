@@ -106,7 +106,7 @@ export const ConnectRequests = () => {
   };
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto">
+    <div className="space-y-6 max-w-4xl mx-auto pb-8">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -172,12 +172,12 @@ export const ConnectRequests = () => {
             {incoming.map((req) => (
               <div
                 key={req.id}
-                className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 backdrop-blur-sm"
+                className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
               >
                 <div className="flex items-center gap-3.5">
                   <div className="w-12 h-12 rounded-xl overflow-hidden bg-slate-800 border border-slate-700 shrink-0">
                     {req.sender?.profile_picture ? (
-                      <img src={req.sender.profile_picture} alt="" className="w-full h-full object-cover" />
+                      <img src={req.sender.profile_picture} alt="" width="48" height="48" loading="lazy" className="w-full h-full object-cover" />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center font-bold text-pink-400 bg-pink-500/10">
                         {req.sender?.display_name?.charAt(0) || 'U'}
@@ -186,7 +186,7 @@ export const ConnectRequests = () => {
                   </div>
                   <div>
                     <h4 className="font-bold text-sm text-white">{req.sender?.display_name}</h4>
-                    <span className="font-mono text-xs text-pink-400 font-semibold">{req.sender?.profile_id}</span>
+                    <span className="font-mono text-xs accent-gradient-text font-semibold">{req.sender?.profile_id}</span>
                   </div>
                 </div>
 
@@ -202,7 +202,7 @@ export const ConnectRequests = () => {
                   <button
                     onClick={() => handleAccept(req.id)}
                     disabled={processingId === req.id}
-                    className="px-5 py-2 rounded-xl bg-pink-500 hover:bg-pink-600 text-white text-xs font-bold transition-colors shadow-md shadow-pink-500/20 flex items-center gap-1.5 cursor-pointer"
+                    className="px-5 py-2 rounded-xl bg-gradient-to-r from-[#8B68F6] to-[#EC6EB8] hover:opacity-95 text-white text-xs font-bold transition-all shadow-md shadow-[#8B68F6]/25 flex items-center gap-1.5 cursor-pointer"
                   >
                     <Check className="w-4 h-4" />
                     <span>Accept</span>
@@ -229,12 +229,12 @@ export const ConnectRequests = () => {
             {outgoing.map((req) => (
               <div
                 key={req.id}
-                className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 backdrop-blur-sm"
+                className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
               >
                 <div className="flex items-center gap-3.5">
                   <div className="w-12 h-12 rounded-xl overflow-hidden bg-slate-800 border border-slate-700 shrink-0">
                     {req.receiver?.profile_picture ? (
-                      <img src={req.receiver.profile_picture} alt="" className="w-full h-full object-cover" />
+                      <img src={req.receiver.profile_picture} alt="" width="48" height="48" loading="lazy" className="w-full h-full object-cover" />
                     ) : (
                       <div className="w-full h-full flex items-center justify-center font-bold text-indigo-400 bg-indigo-500/10">
                         {req.receiver?.display_name?.charAt(0) || 'U'}

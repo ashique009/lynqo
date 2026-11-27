@@ -109,7 +109,7 @@ export const Terms = () => {
   ];
 
   return (
-    <div className="min-h-screen bg-[#FCEEF3] dark:bg-brand-black text-[#2C2C2A] dark:text-slate-100 flex flex-col justify-between transition-colors duration-200 relative overflow-x-hidden select-none">
+    <div className="min-h-dvh bg-[#FCEEF3] dark:bg-brand-black text-[#2C2C2A] dark:text-slate-100 flex flex-col justify-between transition-colors duration-200 relative overflow-x-hidden select-none">
       {/* Background ambient glows */}
       <div className="fixed top-[-10%] left-[-10%] w-[50vw] h-[50vw] rounded-full bg-[#D4537E]/10 dark:bg-brand-purple/10 blur-[120px] pointer-events-none z-0" />
       <div className="fixed bottom-[-10%] right-[-10%] w-[50vw] h-[50vw] rounded-full bg-[#F0997B]/10 dark:bg-brand-purple-light/5 blur-[120px] pointer-events-none z-0" />

@@ -113,7 +113,7 @@ export const Settings = () => {
   };
 
   return (
-    <div className="space-y-6 max-w-3xl mx-auto pb-12">
+    <div className="space-y-6 max-w-3xl mx-auto pb-8">
       <div>
         <h1 className="text-xl sm:text-2xl font-bold text-[#F1F5F9]">Profile Settings</h1>
         <p className="text-sm text-[#94A3B8]">Manage your profile details and security recovery code</p>
@@ -141,7 +141,7 @@ export const Settings = () => {
               className="relative w-20 h-20 rounded-2xl overflow-hidden bg-slate-800 border-2 border-pink-500/30 hover:border-pink-500 cursor-pointer group shadow-md shrink-0 transition-colors"
             >
               {avatarPreview ? (
-                <img src={avatarPreview} alt="" className="w-full h-full object-cover" />
+                <img src={avatarPreview} alt="" width="80" height="80" loading="lazy" className="w-full h-full object-cover" />
               ) : (
                 <div className="w-full h-full flex items-center justify-center font-bold text-2xl text-pink-400 bg-pink-500/10">
                   {profile?.display_name?.charAt(0) || 'U'}
@@ -170,15 +170,13 @@ export const Settings = () => {
               Your Unique Profile ID
             </label>
             <div className="flex items-center gap-2">
-              <input
-                type="text"
-                readOnly
-                value={profile?.profile_id || ''}
-                className="w-full px-4 py-3 rounded-xl bg-slate-950 border border-slate-800 font-mono text-pink-400 font-bold text-sm tracking-wider focus:outline-none cursor-default"
-              />
+              <div className="w-full px-4 py-3 rounded-xl bg-slate-950 border border-slate-800 font-mono text-sm tracking-wider flex items-center">
+                <span className="accent-gradient-text font-bold">{profile?.profile_id || ''}</span>
+              </div>
               <button
                 type="button"
                 onClick={copyId}
+                aria-label="Copy Profile ID"
                 className="p-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors cursor-pointer shrink-0"
                 title="Copy Profile ID"
               >
@@ -189,10 +187,11 @@ export const Settings = () => {
 
           {/* Display Name Input */}
           <div>
-            <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
+            <label htmlFor="display-name" className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">
               Display Name
             </label>
             <input
+              id="display-name"
               type="text"
               required
               maxLength={50}

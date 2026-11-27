@@ -93,7 +93,7 @@ export const AdminLayout = () => {
   );
 
   return (
-    <div className="min-h-screen bg-brand-black text-slate-100 flex flex-col md:flex-row">
+    <div className="min-h-dvh bg-brand-black text-slate-100 flex flex-col md:flex-row">
       {/* Background ambient glows */}
       <div className="fixed top-[-20%] right-[-20%] w-[60vw] h-[60vw] rounded-full bg-brand-purple/5 blur-[150px] pointer-events-none z-0" />
       <div className="fixed bottom-[-20%] left-[-20%] w-[60vw] h-[60vw] rounded-full bg-pink-500/5 blur-[150px] pointer-events-none z-0" />

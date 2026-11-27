@@ -67,7 +67,7 @@ export const ConnectedProfiles = () => {
   });
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto">
+    <div className="space-y-6 max-w-4xl mx-auto pb-8">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -77,7 +77,7 @@ export const ConnectedProfiles = () => {
 
         <Link
           to="/find"
-          className="px-4 py-2.5 rounded-xl bg-pink-500 hover:bg-pink-600 text-white text-xs font-bold transition-all shadow-md shadow-pink-500/20 flex items-center gap-2 self-start sm:self-auto cursor-pointer"
+          className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#8B68F6] to-[#EC6EB8] hover:opacity-95 text-white text-xs font-bold transition-all shadow-md shadow-[#8B68F6]/25 flex items-center gap-2 self-start sm:self-auto cursor-pointer"
         >
           <UserPlus className="w-4 h-4" />
           <span>Find More People</span>
@@ -91,6 +91,7 @@ export const ConnectedProfiles = () => {
           <input
             type="text"
             placeholder="Filter connections by name or ID..."
+            aria-label="Filter connections by name or ID"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-11 pr-4 py-3 rounded-2xl bg-slate-900/80 border border-slate-800 text-white placeholder-slate-500 text-xs focus:outline-none focus:border-pink-500"
@@ -116,7 +117,7 @@ export const ConnectedProfiles = () => {
           </div>
           <Link
             to="/find"
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-pink-500 text-white text-xs font-bold shadow-md shadow-pink-500/20 hover:bg-pink-600 transition-all cursor-pointer"
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-[#8B68F6] to-[#EC6EB8] text-white text-xs font-bold shadow-md shadow-[#8B68F6]/25 hover:opacity-95 transition-all cursor-pointer"
           >
             <UserPlus className="w-4 h-4" />
             <span>Search Profiles</span>
@@ -127,7 +128,7 @@ export const ConnectedProfiles = () => {
           {filtered.map((item) => (
             <div
               key={item.profile.profile_id}
-              className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800 flex items-center justify-between gap-3 backdrop-blur-sm hover:border-slate-700 transition-all"
+              className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 flex items-center justify-between gap-3 hover:border-slate-700 transition-all"
             >
               <div className="flex items-center gap-3 truncate">
                 <div className="relative w-12 h-12 rounded-xl overflow-hidden bg-slate-800 border border-slate-700 shrink-0">
@@ -135,6 +136,8 @@ export const ConnectedProfiles = () => {
                     <img
                       src={getOptimizedImageUrl(item.profile.profile_picture, { width: 96, height: 96 })}
                       alt=""
+                      width="48"
+                      height="48"
                       className="w-full h-full object-cover"
                       loading="lazy"
                       decoding="async"
@@ -152,7 +155,7 @@ export const ConnectedProfiles = () => {
                 <div className="truncate">
                   <h4 className="font-bold text-sm text-white truncate">{item.profile.display_name}</h4>
                   <div className="flex items-center gap-1.5 text-xs">
-                    <span className="font-mono text-pink-400 font-semibold">{item.profile.profile_id}</span>
+                    <span className="font-mono accent-gradient-text font-semibold">{item.profile.profile_id}</span>
                     <span className="text-slate-500">•</span>
                     <span className={item.profile.is_online ? 'text-emerald-400' : 'text-slate-500'}>
                       {item.profile.is_online ? 'Online' : 'Offline'}

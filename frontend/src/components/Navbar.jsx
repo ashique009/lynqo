@@ -67,7 +67,7 @@ export const Navbar = () => {
             className="liquid-glass-circle w-11 h-11 rounded-full p-0.5 flex items-center justify-center transition-transform cursor-pointer active:scale-95 overflow-hidden"
           >
             {profile?.profile_picture ? (
-              <img src={profile.profile_picture} alt="" className="w-full h-full rounded-full object-cover" />
+              <img src={profile.profile_picture} alt="" width="44" height="44" loading="lazy" className="w-full h-full rounded-full object-cover" />
             ) : (
               <div className="w-full h-full rounded-full flex items-center justify-center font-bold text-sm text-white bg-gradient-to-br from-[#8B68F6]/40 to-[#EC6EB8]/30">
                 {profile?.display_name?.charAt(0) || 'U'}
